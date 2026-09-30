@@ -1,4 +1,5 @@
 #! /usr/bin/env python
+# Python-3 port: print() calls only; no other logic changed.
 
 import threading
 import time
@@ -9,9 +10,9 @@ from crypto_protocol import CryptoProtocol
 
 
 def usage():
-    print "Usage:"
-    print "    Server: " + sys.argv[0] + " port_number"
-    print "    Client: " + sys.argv[0] + " ip_address port_number"
+    print("Usage:")
+    print("    Server: " + sys.argv[0] + " port_number")
+    print("    Client: " + sys.argv[0] + " ip_address port_number")
     sys.exit()
 
 if not (len(sys.argv) == 2 or len(sys.argv) == 3):
@@ -31,7 +32,7 @@ if len(sys.argv) == 2:  # server
     try:
         conn.listen(int(sys.argv[1]))
     except:
-        print "Unable to open port %d" % int(sys.argv[1])
+        print("Unable to open port %d" % int(sys.argv[1]))
         sys.exit()
     dh = DiffieHellman()
     p, g, A = dh.generate_public_broadcast()
@@ -44,7 +45,7 @@ elif len(sys.argv) == 3:  # client
     try:
         conn.connect(sys.argv[1], int(sys.argv[2]))
     except:
-        print "Unable to connect to %s at port %d" % (sys.argv[1], int(sys.argv[2]))
+        print("Unable to connect to %s at port %d" % (sys.argv[1], int(sys.argv[2])))
         sys.exit()
     p = int(get_line())
     g = int(get_line())
@@ -54,7 +55,7 @@ elif len(sys.argv) == 3:  # client
     conn.send(str(B))
     crypto_protocol = CryptoProtocol(dh.get_shared_secret(A))
 else:
-    print "Unreachable code reached!!!"
+    print("Unreachable code reached!!!")
     sys.exit()
 
 

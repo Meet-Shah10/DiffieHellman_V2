@@ -1,6 +1,7 @@
 #! /usr/bin/env python
+# Python-3 port: import tkinter (lowercase); print() calls.
 
-import Tkinter
+import tkinter as Tkinter   # Python 3: renamed from Tkinter to tkinter
 import sys
 
 message_sender_callback = None
@@ -15,7 +16,7 @@ def add_new_text(text):
 
 def send_message_callback():
     if message_sender_callback is None:
-        print "Sender callback not registered properly :("
+        print("Sender callback not registered properly :(")
         sys.exit
     else:
         message = input_text_box.get()
