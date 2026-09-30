@@ -3,7 +3,10 @@ headless_mitm_test.py  -  verifies the MITM scenario without any GUI.
 Three threads: real server (port 19877), MITM proxy (listens 19878, connects 19877),
 client (connects 19878).  MITM decrypts every message and prints it in plaintext.
 
-Run with:  venv/Scripts/python headless_mitm_test.py
+Run with:  python headless_mitm_test.py
+
+Phase 2/3 note: CryptoProtocol uses directional keys; is_server flags must be
+mirrored correctly on each side of each leg.
 """
 import threading
 import time
@@ -31,7 +34,7 @@ def run_server():
         p, g, A = dh.generate_public_broadcast()
         conn.send(str(p)); conn.send(str(g)); conn.send(str(A))
         B = int(conn.recv())
-        cp = CryptoProtocol(dh.get_shared_secret(B))
+        cp = CryptoProtocol(dh.get_shared_secret(B), is_server=True)
 
         for _ in MESSAGES:
             raw = conn.recv()
@@ -64,7 +67,7 @@ def run_mitm():
         dh_s = DiffieHellman(p_s, g_s)
         _, _, B_mallory = dh_s.generate_public_broadcast()
         conn_server.send(str(B_mallory))
-        cp_server = CryptoProtocol(dh_s.get_shared_secret(A_s))
+        cp_server = CryptoProtocol(dh_s.get_shared_secret(A_s), is_server=False)  # Mallory acts as client toward server
 
         # Mallory↔Client DH  (inject Mallory's own A to Alice)
         dh_c = DiffieHellman(p_s, g_s)
@@ -73,7 +76,7 @@ def run_mitm():
         conn_client.send(str(g_s))
         conn_client.send(str(A_mallory))   # ← forged value
         B_c = int(conn_client.recv())
-        cp_client = CryptoProtocol(dh_c.get_shared_secret(B_c))
+        cp_client = CryptoProtocol(dh_c.get_shared_secret(B_c), is_server=True)   # Mallory acts as server toward client
 
         # Relay: client → MITM → server, printing plaintext
         for _ in MESSAGES:
@@ -104,7 +107,7 @@ def run_client():
         dh = DiffieHellman(p, g)
         _, _, B = dh.generate_public_broadcast()
         conn.send(str(B))
-        cp = CryptoProtocol(dh.get_shared_secret(A))
+        cp = CryptoProtocol(dh.get_shared_secret(A), is_server=False)
 
         for msg in MESSAGES:
             conn.send(cp.encrypt(msg))

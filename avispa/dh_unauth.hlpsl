@@ -1,0 +1,66 @@
+%% dh_unauth.hlpsl : unauthenticated DH under Dolev-Yao intruder.
+%% Expected result: UNSAFE (intruder substitutes DH values, learns the session key).
+%% Status: UNRUN — run with: avispa avispa/dh_unauth.hlpsl --ofmc
+%%
+%% This models the VULNERABLE mode of the DH Chat demo.
+%% The intruder can intercept all messages and substitutes its own DH values,
+%% ending up with the session key while neither side detects the attack.
+%%
+%% Model design (Part 5.3 of IMPLEMENTATION_PLAN_v2.md):
+%%   - DH is modelled as exp(G, X) with G and X fresh per session.
+%%   - The shared key is exp(exp(G,X),Y) -- never a stand-in fresh value.
+%%   - The secrecy goal targets a PAYLOAD encrypted under the derived key,
+%%     not the public DH values (which the intruder sees by design).
+%%   - Role order: server sends first (matches the code).
+
+role server(S, C : agent, G : text, SND, RCV : channel(dy))
+played_by S def=
+  local State : nat, X : text, Msg : text
+  init  State := 0
+  transition
+    1. State = 0 /\ RCV(start) =|>
+       State' := 2 /\ X' := new()
+       /\ SND(exp(G, X'))
+
+    2. State = 2 /\ RCV({Msg'}_exp(exp(G, X), ?)) =|>
+       State' := 4
+       /\ request(S, C, auth_c_msg, Msg')
+end role
+
+role client(S, C : agent, G : text, SND, RCV : channel(dy))
+played_by C def=
+  local State : nat, Y : text, GX : message, Msg : text
+  init  State := 0
+  transition
+    1. State = 0 /\ RCV(GX') =|>
+       State' := 2 /\ Y' := new() /\ Msg' := new()
+       /\ SND(exp(G, Y'))
+       /\ SND({Msg'}_exp(GX', Y'))
+       /\ witness(C, S, auth_c_msg, Msg')
+       /\ secret(Msg', sec_msg, {S, C})
+end role
+
+role session(S, C : agent, G : text) def=
+  local SS, RS, SC, RC : channel(dy)
+  composition
+    server(S, C, G, SS, RS)
+    /\ client(S, C, G, SC, RC)
+end role
+
+role environment() def=
+  const s, c : agent,
+        g : text,
+        sec_msg, auth_c_msg : protocol_id
+  intruder_knowledge = {s, c, g}
+  composition
+    session(s, c, g)
+    /\ session(s, i, g)
+    /\ session(i, c, g)
+end role
+
+goal
+  secrecy_of sec_msg
+  authentication_on auth_c_msg
+end goal
+
+environment()

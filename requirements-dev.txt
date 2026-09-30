@@ -1,0 +1,2 @@
+# Dev / test dependencies — exact pins (Phase 1.5 / F11)
+pytest==8.3.5

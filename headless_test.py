@@ -1,6 +1,9 @@
 """
-headless_test.py  -  verifies the full DH handshake + AES-CBC round-trip
-without launching any GUI.  Run with:  venv/Scripts/python headless_test.py
+headless_test.py  -  verifies the full DH handshake + AES-GCM round-trip
+without launching any GUI.  Run with:  python headless_test.py
+
+Phase 2 note: CryptoProtocol now uses directional keys; pass is_server=True
+for the server and is_server=False for the client.
 """
 import threading
 import time
@@ -27,7 +30,7 @@ def run_server():
         conn.send(str(g))
         conn.send(str(A))
         B = int(conn.recv())
-        cp = CryptoProtocol(dh.get_shared_secret(B))
+        cp = CryptoProtocol(dh.get_shared_secret(B), is_server=True)
 
         # receive all messages from client
         for _ in MESSAGES:
@@ -55,7 +58,7 @@ def run_client():
         dh = DiffieHellman(p, g)
         _, _, B = dh.generate_public_broadcast()
         conn.send(str(B))
-        cp = CryptoProtocol(dh.get_shared_secret(A))
+        cp = CryptoProtocol(dh.get_shared_secret(A), is_server=False)
 
         # send messages, collect echoes
         for msg in MESSAGES:

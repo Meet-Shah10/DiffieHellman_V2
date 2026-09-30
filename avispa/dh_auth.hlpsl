@@ -1,0 +1,94 @@
+%% dh_auth.hlpsl : DHC1 signed DH (3-message) under Dolev-Yao intruder.
+%% Expected result: SAFE for secrecy and both authentication goals.
+%% Status: UNRUN — run with: avispa avispa/dh_auth.hlpsl --ofmc
+%%
+%% This models the SECURE (--secure) mode of the DH Chat demo.
+%% Both sides authenticate with pinned RSA-PSS signatures over a labelled
+%% transcript containing both fingerprints and both DH values.
+%%
+%% Model design (Part 5.3 and 5.5 of IMPLEMENTATION_PLAN_v2.md):
+%%   - DH as exp(G, X); shared key = exp(exp(G,X),Y).
+%%   - Secrecy goal: Msg' sent encrypted under the derived key.
+%%   - Both directions authenticated: server-to-client (auth_s_gs) and
+%%     client-to-server (auth_c_gc, auth_c_msg).
+%%   - Labels (server_hello, client_auth, server_auth) model the domain
+%%     separation in t_server_hello / t_client_auth / t_server_auth.
+%%   - Both agent names inside signatures model the fingerprints (S, C stand in
+%%     for FPs, FPc in the implementation).
+%%   - Role order: server sends first (matches the code).
+%%   - Intruder gets its own key pair (ki, inv(ki)) but not inv(ks) or inv(kc).
+%%
+%% OFMC is the primary back-end. CL-AtSe may be tried if it accepts exp().
+
+role server(S, C : agent, Ks, Kc : public_key, G : text, SND, RCV : channel(dy))
+played_by S def=
+  local State : nat, X : text, GY : message, Msg : text
+  const server_hello, client_auth, server_auth : protocol_id
+  init  State := 0
+  transition
+    %% M1: server hello — sign own DH value and group id
+    1. State = 0 /\ RCV(start) =|>
+       State' := 2 /\ X' := new()
+       /\ SND(exp(G, X') . {server_hello . exp(G, X')}_inv(Ks))
+       /\ witness(S, C, auth_s_gs, exp(G, X'))
+
+    %% M2: client auth — verify client sig covering both values and both agents,
+    %%     then send M3 covering same transcript (fresh due to GY').
+    2. State = 2
+       /\ RCV(GY' . {client_auth . S . C . exp(G, X) . GY'}_inv(Kc)
+                  . {Msg'}_exp(GY', X)) =|>
+       State' := 4
+       /\ SND({server_auth . S . C . exp(G, X) . GY'}_inv(Ks))
+       /\ request(S, C, auth_c_gc, GY')
+       /\ request(S, C, auth_c_msg, Msg')
+end role
+
+role client(S, C : agent, Ks, Kc : public_key, G : text, SND, RCV : channel(dy))
+played_by C def=
+  local State : nat, Y : text, GX : message, Msg : text
+  const server_hello, client_auth, server_auth : protocol_id
+  init  State := 0
+  transition
+    %% M1 receive: verify server sig on Gs
+    1. State = 0
+       /\ RCV(GX' . {server_hello . GX'}_inv(Ks)) =|>
+       State' := 2 /\ Y' := new() /\ Msg' := new()
+       /\ SND(exp(G, Y')
+              . {client_auth . S . C . GX' . exp(G, Y')}_inv(Kc)
+              . {Msg'}_exp(GX', Y'))
+       /\ witness(C, S, auth_c_gc, exp(G, Y'))
+       /\ witness(C, S, auth_c_msg, Msg')
+       /\ secret(Msg', sec_msg, {S, C})
+
+    %% M3 receive: verify server sig covers the full transcript incl. our fresh Gc
+    2. State = 2
+       /\ RCV({server_auth . S . C . GX . exp(G, Y)}_inv(Ks)) =|>
+       State' := 4
+       /\ request(C, S, auth_s_gs, GX)
+end role
+
+role session(S, C : agent, Ks, Kc : public_key, G : text) def=
+  local SS, RS, SC, RC : channel(dy)
+  composition
+    server(S, C, Ks, Kc, G, SS, RS)
+    /\ client(S, C, Ks, Kc, G, SC, RC)
+end role
+
+role environment() def=
+  const s, c : agent,
+        ks, kc, ki : public_key,
+        g : text,
+        sec_msg, auth_c_gc, auth_c_msg, auth_s_gs : protocol_id
+  intruder_knowledge = {s, c, g, ks, kc, ki, inv(ki)}
+  composition
+    session(s, c, ks, kc, g)
+    /\ session(s, i, ks, ki, g)
+    /\ session(i, c, ki, kc, g)
+end role
+
+goal
+  secrecy_of sec_msg
+  authentication_on auth_c_gc, auth_c_msg, auth_s_gs
+end goal
+
+environment()

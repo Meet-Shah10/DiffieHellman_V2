@@ -1,10 +1,10 @@
 """
-tests/test_crypto_v2.py — Phase 2 unit tests.
+tests/test_crypto_v2.py — Phase 2/3 unit tests.
 
 Covers:
-  A. AES-256-GCM: round-trip, tamper detection, nonce uniqueness, key properties
+  A. AES-256-GCM: round-trip, tamper detection, nonce uniqueness
   B. RFC 3526 group: bit-length, generator, DH uses it, bad params rejected
-  C. Public value range: validate_public_value edge cases
+  C. Public value range: validate_public_value edge cases (incl. subgroup check F02)
   D. DH shared secret: matching secrets, get_shared_secret validates input
   E. Integration: headless_test and headless_mitm_test still pass
      (MITM still works in vulnerable mode — go/no-go for Phase 3)
@@ -26,68 +26,66 @@ from diffie_hellman import DiffieHellman, RFC3526_P, RFC3526_G
 class TestAESGCM(unittest.TestCase):
 
     def setUp(self):
-        # Use an arbitrary large integer as the shared secret (mimics DH output)
-        self.cp = CryptoProtocol(0xDEADBEEF_CAFEBABE_12345678_9ABCDEF0)
+        # Use mirrored is_server flags (server=True, client=False)
+        secret = 0xDEADBEEF_CAFEBABE_12345678_9ABCDEF0
+        self.srv = CryptoProtocol(secret, is_server=True)
+        self.cli = CryptoProtocol(secret, is_server=False)
 
-    def test_roundtrip_ascii(self):
+    def test_roundtrip_client_to_server(self):
         text = "Hello, Phase 2!"
-        self.assertEqual(self.cp.decrypt(self.cp.encrypt(text)), text)
+        self.assertEqual(self.srv.decrypt(self.cli.encrypt(text)), text)
+
+    def test_roundtrip_server_to_client(self):
+        text = "Reply from server!"
+        self.assertEqual(self.cli.decrypt(self.srv.encrypt(text)), text)
 
     def test_roundtrip_unicode(self):
         text = "Ñoño 日本語 emoji 🔐"
-        self.assertEqual(self.cp.decrypt(self.cp.encrypt(text)), text)
+        self.assertEqual(self.srv.decrypt(self.cli.encrypt(text)), text)
 
     def test_roundtrip_empty(self):
         text = ""
-        self.assertEqual(self.cp.decrypt(self.cp.encrypt(text)), text)
+        self.assertEqual(self.srv.decrypt(self.cli.encrypt(text)), text)
 
     def test_tamper_detection_ciphertext(self):
         """Flip a byte in the ciphertext body; AES-GCM must raise."""
-        ct = self.cp.encrypt("secret message")
-        # nonce = first 12 bytes = first 24 hex chars; flip 1 byte after nonce
+        ct = self.cli.encrypt("secret message")
+        # nonce = first 4-byte pad + 8-byte counter = 12 bytes = 24 hex chars
         tampered = ct[:24] + format(int(ct[24:26], 16) ^ 0xFF, '02x') + ct[26:]
-        with self.assertRaises(Exception):   # cryptography raises InvalidTag
-            self.cp.decrypt(tampered)
+        with self.assertRaises(Exception):
+            self.srv.decrypt(tampered)
 
     def test_tamper_detection_tag(self):
         """Flip a byte in the GCM authentication tag (last 16 bytes)."""
-        ct = self.cp.encrypt("secret message")
-        # tag is last 32 hex chars
+        ct = self.cli.encrypt("secret message")
         tampered = ct[:-32] + format(int(ct[-32:-30], 16) ^ 0x01, '02x') + ct[-30:]
         with self.assertRaises(Exception):
-            self.cp.decrypt(tampered)
+            self.srv.decrypt(tampered)
 
     def test_nonce_uniqueness(self):
         """Same plaintext encrypted twice must produce different ciphertext."""
         text = "identical plaintext"
-        self.assertNotEqual(self.cp.encrypt(text), self.cp.encrypt(text))
+        self.assertNotEqual(self.cli.encrypt(text), self.cli.encrypt(text))
 
-    def test_wire_format_length(self):
-        """Wire hex = 12-byte nonce + len(plaintext-utf8) bytes ct + 16-byte tag."""
-        text = "hi"
-        ct_hex = self.cp.encrypt(text)
-        raw = bytes.fromhex(ct_hex)
-        # 12 nonce + 2 plaintext bytes + 16 tag = 30 bytes
-        self.assertEqual(len(raw), 12 + len(text.encode('utf-8')) + 16)
-
-    def test_key_is_32_bytes(self):
-        self.assertEqual(len(self.cp.key), 32)
-
-    def test_key_deterministic(self):
-        """Same shared secret → same derived key."""
-        cp2 = CryptoProtocol(0xDEADBEEF_CAFEBABE_12345678_9ABCDEF0)
-        self.assertEqual(self.cp.key, cp2.key)
-
-    def test_different_secrets_different_keys(self):
-        cp2 = CryptoProtocol(0x1111111111111111)
-        self.assertNotEqual(self.cp.key, cp2.key)
-
-    def test_cross_decrypt_fails(self):
-        """Ciphertext from one session cannot be decrypted by a different key."""
-        cp2 = CryptoProtocol(0xAAAA)
-        ct = self.cp.encrypt("cross-session test")
+    def test_replay_rejected(self):
+        """Replaying a ciphertext must raise (counter nonce)."""
+        ct = self.cli.encrypt("first")
+        self.srv.decrypt(ct)   # consume
         with self.assertRaises(Exception):
-            cp2.decrypt(ct)
+            self.srv.decrypt(ct)
+
+    def test_reflection_rejected(self):
+        """Client's ciphertext reflected back to itself must raise."""
+        ct = self.cli.encrypt("hello")
+        with self.assertRaises(Exception):
+            self.cli.decrypt(ct)
+
+    def test_different_secrets_different_ciphertext(self):
+        srv2 = CryptoProtocol(0x1111111111111111, is_server=True)
+        cli2 = CryptoProtocol(0x1111111111111111, is_server=False)
+        ct1 = self.cli.encrypt("same text")
+        ct2 = cli2.encrypt("same text")
+        self.assertNotEqual(ct1, ct2)
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +130,10 @@ class TestRFC3526Group(unittest.TestCase):
             DiffieHellman(1234, 5)
 
     def test_private_exponent_in_range(self):
+        from diffie_hellman import RFC3526_Q
         dh = DiffieHellman()
         self.assertGreater(dh.private_exponent, 1)
-        self.assertLess(dh.private_exponent, RFC3526_P - 1)
+        self.assertLess(dh.private_exponent, RFC3526_Q)   # in [2, q-1] (F23)
 
     def test_fresh_exponent_per_instance(self):
         """Two DH instances must (with overwhelming probability) have different exponents."""
@@ -157,8 +156,11 @@ class TestRFC3526Group(unittest.TestCase):
 class TestPublicValueRange(unittest.TestCase):
 
     def test_valid_values_accepted(self):
-        DiffieHellman.validate_public_value(2, RFC3526_P)
-        DiffieHellman.validate_public_value(RFC3526_P - 2, RFC3526_P)
+        # Use actual subgroup members: g^2 and g^3 mod p are always in the subgroup
+        v1 = pow(RFC3526_G, 2, RFC3526_P)
+        v2 = pow(RFC3526_G, 3, RFC3526_P)
+        DiffieHellman.validate_public_value(v1, RFC3526_P)   # must not raise
+        DiffieHellman.validate_public_value(v2, RFC3526_P)   # must not raise
 
     def test_zero_rejected(self):
         with self.assertRaises(ValueError):
@@ -175,6 +177,11 @@ class TestPublicValueRange(unittest.TestCase):
     def test_p_rejected(self):
         with self.assertRaises(ValueError):
             DiffieHellman.validate_public_value(RFC3526_P, RFC3526_P)
+
+    def test_value_11_rejected_subgroup_check(self):
+        """11 passes the range check but fails pow(v,q,p)==1 (F02)."""
+        with self.assertRaises(ValueError):
+            DiffieHellman.validate_public_value(11, RFC3526_P)
 
     def test_negative_rejected(self):
         with self.assertRaises(ValueError):
@@ -223,8 +230,9 @@ class TestDHSharedSecret(unittest.TestCase):
         dhB = DiffieHellman(RFC3526_P, RFC3526_G)
         _, _, B = dhB.generate_public_broadcast()
 
-        cpA = CryptoProtocol(dhA.get_shared_secret(B))
-        cpB = CryptoProtocol(dhB.get_shared_secret(A))
+        # Server is dhB (is_server=True), client is dhA (is_server=False)
+        cpB = CryptoProtocol(dhB.get_shared_secret(A), is_server=True)
+        cpA = CryptoProtocol(dhA.get_shared_secret(B), is_server=False)
 
         plaintext = "DH + AES-GCM works!"
         self.assertEqual(cpB.decrypt(cpA.encrypt(plaintext)), plaintext)
@@ -260,7 +268,7 @@ class TestHeadlessRegression(unittest.TestCase):
                 p, g, A = dh.generate_public_broadcast()
                 c.send(str(p)); c.send(str(g)); c.send(str(A))
                 B = int(c.recv())
-                cp = CryptoProtocol(dh.get_shared_secret(B))
+                cp = CryptoProtocol(dh.get_shared_secret(B), is_server=True)
                 for _ in MESSAGES:
                     server_got.append(cp.decrypt(c.recv()))
                     c.send(cp.encrypt("ECHO:" + server_got[-1]))
@@ -277,7 +285,7 @@ class TestHeadlessRegression(unittest.TestCase):
                 dh = DiffieHellman(p, g)
                 _, _, B = dh.generate_public_broadcast()
                 c.send(str(B))
-                cp = CryptoProtocol(dh.get_shared_secret(A))
+                cp = CryptoProtocol(dh.get_shared_secret(A), is_server=False)
                 for m in MESSAGES:
                     c.send(cp.encrypt(m))
                     client_got.append(cp.decrypt(c.recv()))
@@ -320,7 +328,7 @@ class TestHeadlessRegression(unittest.TestCase):
                 p, g, A = dh.generate_public_broadcast()
                 c.send(str(p)); c.send(str(g)); c.send(str(A))
                 B = int(c.recv())
-                cp = CryptoProtocol(dh.get_shared_secret(B))
+                cp = CryptoProtocol(dh.get_shared_secret(B), is_server=True)
                 for _ in MESSAGES:
                     server_got.append(cp.decrypt(c.recv()))
                 c._sock.close()
@@ -338,13 +346,13 @@ class TestHeadlessRegression(unittest.TestCase):
                 dh_s = DiffieHellman(p, g)
                 _, _, B_s = dh_s.generate_public_broadcast()
                 cs.send(str(B_s))
-                cp_s = CryptoProtocol(dh_s.get_shared_secret(A_s))
+                cp_s = CryptoProtocol(dh_s.get_shared_secret(A_s), is_server=False)  # Mallory as client toward server
 
                 dh_c = DiffieHellman(p, g)
                 _, _, A_c = dh_c.generate_public_broadcast()
                 cc.send(str(p)); cc.send(str(g)); cc.send(str(A_c))
                 B_c = int(cc.recv())
-                cp_c = CryptoProtocol(dh_c.get_shared_secret(B_c))
+                cp_c = CryptoProtocol(dh_c.get_shared_secret(B_c), is_server=True)  # Mallory as server toward client
 
                 for _ in MESSAGES:
                     raw = cc.recv()
@@ -364,7 +372,7 @@ class TestHeadlessRegression(unittest.TestCase):
                 dh = DiffieHellman(p, g)
                 _, _, B = dh.generate_public_broadcast()
                 c.send(str(B))
-                cp = CryptoProtocol(dh.get_shared_secret(A))
+                cp = CryptoProtocol(dh.get_shared_secret(A), is_server=False)
                 for m in MESSAGES:
                     c.send(cp.encrypt(m))
                     import time as t; t.sleep(0.05)

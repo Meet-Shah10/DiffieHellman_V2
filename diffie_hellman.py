@@ -1,10 +1,11 @@
 #! /usr/bin/env python
-# Phase 0: Python 3 port (print, bytes/str, pycryptodome)
+# Phase 0: Python 3 port (print, bytes/str, socket)
 # Phase 2: RFC 3526 2048-bit MODP group; secrets.randbelow; validate_public_value;
 #          reject any p/g that isn't the RFC 3526 constant.
+# Phase 3: Subgroup check upgraded to pow(v,q,p)==1 (F02); exponent in [2,q-1];
+#          asserts replaced with explicit raises (F23).
 
 import secrets
-from Crypto.PublicKey import RSA   # still used in __main__ self-test only
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +39,9 @@ RFC3526_P = int(
 RFC3526_G = 2
 
 
+RFC3526_Q = (RFC3526_P - 1) // 2   # safe-prime order: q is also prime
+
+
 def _verify_rfc3526_group() -> None:
     """
     Sanity-check the RFC 3526 constants at import time.
@@ -46,12 +50,16 @@ def _verify_rfc3526_group() -> None:
       2. g^q ≡ 1 (mod p) where q = (p-1)/2  →  g is in the prime-order subgroup.
     This does NOT run a full Miller-Rabin primality test (the RFC value is trusted),
     but it catches accidental edits or copy-paste errors.
+    Uses explicit raise, not assert, so -O cannot suppress the check (F23).
     """
-    assert RFC3526_P.bit_length() == 2048, \
-        f"RFC3526_P must be 2048 bits, got {RFC3526_P.bit_length()}"
-    q = (RFC3526_P - 1) // 2
-    assert pow(RFC3526_G, q, RFC3526_P) == 1, \
-        "RFC3526_G must satisfy g^((p-1)/2) ≡ 1 (mod p)"
+    if RFC3526_P.bit_length() != 2048:
+        raise RuntimeError(
+            f"RFC3526_P must be 2048 bits, got {RFC3526_P.bit_length()}"
+        )
+    if pow(RFC3526_G, RFC3526_Q, RFC3526_P) != 1:
+        raise RuntimeError(
+            "RFC3526_G must satisfy g^((p-1)/2) ≡ 1 (mod p)"
+        )
 
 
 _verify_rfc3526_group()   # runs once at import time
@@ -68,7 +76,7 @@ class DiffieHellman:
         Server path (no args):  use RFC 3526 constants.
         Client path (p, g provided):  MUST match RFC 3526 constants exactly.
         Raises ValueError if p/g are wrong — rejects parameter injection.
-        Private exponent: fresh secrets.randbelow() per instance.
+        Private exponent: fresh secrets.randbelow() per instance, uniform in [2, q-1].
         """
         if p is not None or g is not None:
             if p != RFC3526_P or g != RFC3526_G:
@@ -78,8 +86,8 @@ class DiffieHellman:
                 )
         self.p = RFC3526_P
         self.g = RFC3526_G
-        # secrets.randbelow uses OS CSPRNG; safer than random.randint
-        self.private_exponent = secrets.randbelow(RFC3526_P - 3) + 2   # in [2, p-2]
+        # Exponent in [2, q-1] — stays in the prime-order subgroup (F23: was [2, p-2])
+        self.private_exponent = secrets.randbelow(RFC3526_Q - 2) + 2
 
     def generate_public_broadcast(self) -> tuple:
         """Return (p, g, public_value) where public_value = g^priv mod p."""
@@ -88,14 +96,19 @@ class DiffieHellman:
     @staticmethod
     def validate_public_value(value: int, p: int) -> None:
         """
-        Raise ValueError if value ∉ (1, p-1).
-        Prevents small-subgroup attacks: values 0, 1, or p-1 allow an attacker
-        to enumerate the private exponent bit-by-bit.
+        Raise ValueError if value is outside the prime-order subgroup.
+
+        Two checks are required (F02):
+          1. Range: 1 < value < p-1  (removes orders 1 and 2)
+          2. Subgroup: value^q mod p == 1  (removes order-2q elements such as 11
+             that pass the range check but are not in the prime-order subgroup
+             and leak one bit of the private exponent).
         """
-        if not (1 < value < p - 1):
+        q = RFC3526_Q
+        if not (1 < value < p - 1) or pow(value, q, p) != 1:
             raise ValueError(
-                f"Received DH public value is out of safe range (1, p-1). "
-                f"Possible small-subgroup attack."
+                "Received DH public value is outside the prime-order subgroup. "
+                "Possible small-subgroup attack (value failed range or pow(v,q,p)==1 check)."
             )
 
     def get_shared_secret(self, public_share: int) -> int:
@@ -109,7 +122,7 @@ class DiffieHellman:
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    print(f"[*] Using RFC 3526 Group 14  (p = {RFC3526_P.bit_length()} bits, g = {RFC3526_G})")
+    print(f"[*] Using RFC 3526 Group 14  (p = {RFC3526_P.bit_length()} bits, g = {RFC3526_G}, q = {RFC3526_Q.bit_length()} bits)")
 
     personA = DiffieHellman()
     pA, gA, A = personA.generate_public_broadcast()
@@ -140,5 +153,12 @@ if __name__ == '__main__':
         assert False, "Should have raised"
     except ValueError:
         print("[+] Out-of-range public value correctly rejected")
+
+    # Verify subgroup check — 11 passes the range check but fails pow(v,q,p)==1 (F02)
+    try:
+        DiffieHellman.validate_public_value(11, RFC3526_P)
+        assert False, "Should have raised"
+    except ValueError:
+        print("[+] Non-residue value 11 correctly rejected (subgroup check)")
 
     print("[+] DH self-test passed")
