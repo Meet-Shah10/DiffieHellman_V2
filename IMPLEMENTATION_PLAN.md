@@ -3,211 +3,145 @@
 > **Reading guide:**
 > - `VERIFIED` = read directly from repo source.
 > - `ASSUMED` = reasonable inference; must be confirmed by the team.
-> - ✅ **DONE** = already completed and tested.
+> - ✅ **DONE** = completed and tested (see Appendix audit trail).
 > - 🔲 **TODO** = not yet started.
 > - ⚠️ = needs team decision or confirmation.
 >
-> Original repo: `jaybosamiya/DiffieHellman-ManInTheMiddle` (MIT, archived 2018).
-> Our fork target: Python 3.13, Windows + Linux compatible.
+> Original repo: `jaybosamiya/DiffieHellman-ManInTheMiddle` (MIT, archived 2018).  
+> Our fork: Python 3.13, Windows + Linux compatible.  
+> Git tag `phase-0` = commit `63b402d`.
 
 ---
 
-## PART 1 — FINDINGS SUMMARY (Step A)
+## PART 1 — FINDINGS SUMMARY
 
 ### 1.1 Python Version and Breaking Constructs
 
-**VERIFIED:** The original files were Python 2. Every file uses `print` as a statement,
-`Tkinter` (capital T), and PyCrypto-specific APIs. Python system on this machine is 3.13.7.
+**VERIFIED:** Every original file was Python 2. System Python is 3.13.7.
 
 | File | Line(s) | Python 2 construct | Python 3 impact |
 |---|---|---|---|
-| `run.py` | 12-14, 34, 47, 57 | `print "..."` bare statements | `SyntaxError` |
-| `diffie_hellman.py` | 33-35, 47-48 | `print '...'` bare statements | `SyntaxError` |
-| `diffie_hellman.py` | 18, 22 | `randint(p/2, p-1)` — `/` returns float | `TypeError` in `randint` (needs `int`) |
-| `diffie_hellman.py` | 4, 9 | `from Crypto.PublicKey import RSA; RSAKey.key.p` | PyCrypto is dead; pycryptodome API is `RSAKey.p` |
-| `crypto_protocol.py` | 14, 57, 73 | `len(data) / 16` — float division | Wrong block counts; `range(float)` → `TypeError` |
-| `crypto_protocol.py` | 9 | `''.join(chr(randint(0,255))...)` | `chr()` on int works in Py3, but result is `str` not `bytes` |
-| `crypto_protocol.py` | 25, 31 | `ord(data[-1])`, `ord(data[i])` | `bytes[i]` is already `int` in Py3; `ord(int)` → `TypeError` |
-| `crypto_protocol.py` | 52 | `chr(ord(A[i]) ^ ord(B[i]))` | Same `ord(int)` crash |
-| `crypto_protocol.py` | 58, 64, 74, 79 | `encrypted_data += encrypted_block` (`str += str`) | Must be `bytes += bytes` |
-| `crypto_protocol.py` | 90 | `h.update(str(key))` | `update()` requires `bytes` in Py3 |
-| `crypto_protocol.py` | 91 | `a2b_hex(h.hexdigest())` | Works but `h.hexdigest()` is `str`; `a2b_hex` needs `bytes` |
-| `crypto_protocol.py` | 71 | `print "Invalid size..."` | `SyntaxError` |
-| `gui.py` | 3 | `import Tkinter` (capital T) | `ModuleNotFoundError`; Py3 name is `tkinter` |
-| `gui.py` | 18 | `print "Sender callback..."` | `SyntaxError` |
-| `mitm.py` | 15-16, 43, 49 | `print "..."` bare statements | `SyntaxError` |
-| `network.py` | 3 | `import pwn` (pwntools) | Works on Linux; **unreliable on Windows** |
-| `network.py` | 22 | `.decode('base64')` — Python 2 codec | `LookupError: unknown encoding: base64` in Py3 |
-| `network.py` | 27-28 | `.encode('base64').replace('\n','') + '\n'` | Same codec error; `str + str` vs `bytes + bytes` |
+| `run.py` | 12-14, 34, 47, 57 | `print "..."` | `SyntaxError` |
+| `diffie_hellman.py` | 33-35, 47-48 | `print '...'` | `SyntaxError` |
+| `diffie_hellman.py` | 18, 22 | `randint(p/2, p-1)` | `TypeError`: `randint` needs `int` |
+| `diffie_hellman.py` | 4, 9 | `from Crypto…; RSAKey.key.p` | PyCrypto dead; pycryptodome uses `RSAKey.p` |
+| `crypto_protocol.py` | 14, 57, 73 | `len(data) / 16` | Wrong block count; `range(float)` crashes |
+| `crypto_protocol.py` | 9, 25, 31, 52 | `chr()`/`ord()` on str used as bytes | `TypeError` in Python 3 bytes context |
+| `crypto_protocol.py` | 58, 64, 74, 79 | `str += str` for binary concat | Must be `bytes += bytes` |
+| `crypto_protocol.py` | 90 | `h.update(str(key))` | `update()` needs `bytes` |
+| `crypto_protocol.py` | 91 | `a2b_hex(h.hexdigest())` | `h.hexdigest()` is `str`; use `bytes.fromhex()` |
+| `crypto_protocol.py` | 71 | `print "..."` | `SyntaxError` |
+| `gui.py` | 3 | `import Tkinter` | `ModuleNotFoundError`; Py 3 = `tkinter` |
+| `gui.py` | 18 | `print "..."` | `SyntaxError` |
+| `mitm.py` | 15-16, 43, 49 | `print "..."` | `SyntaxError` |
+| `network.py` | 3 | `import pwn` | Unreliable on Windows |
+| `network.py` | 22, 27-28 | `.decode('base64')` / `.encode('base64')` | `LookupError`: codec removed in Py 3 |
 
-### 1.2 Third-Party Dependencies (VERIFIED from imports)
+### 1.2 Third-Party Dependencies (VERIFIED)
 
-| Import | File(s) | Library needed | Status |
-|---|---|---|---|
-| `from Crypto.PublicKey import RSA` | `diffie_hellman.py:4` | `pycryptodome` | ✅ installed (3.23.0) |
-| `from Crypto.Cipher import AES` | `crypto_protocol.py:13` | `pycryptodome` | ✅ installed |
-| `from Crypto.Hash import SHA256` | `crypto_protocol.py:97` (inside `__init__`) | `pycryptodome` | ✅ installed |
-| `import pwn` | `network.py:3` (ORIGINAL) | `pwntools` | ✅ REMOVED — replaced with stdlib `socket` |
-| `import tkinter` | `gui.py:4` (our port) | stdlib | ✅ stdlib (Python 3.13) |
-| `import socket`, `import base64` | `network.py:4-5` (our port) | stdlib | ✅ stdlib |
+| Import | Library | Status |
+|---|---|---|
+| `from Crypto.PublicKey import RSA` | `pycryptodome` | ✅ 3.23.0 installed |
+| `from Crypto.Cipher import AES` | `pycryptodome` | ✅ installed |
+| `from Crypto.Hash import SHA256` | `pycryptodome` | ✅ installed |
+| `import pwn` (ORIGINAL only) | `pwntools` | ✅ REMOVED — stdlib `socket` used instead |
+| `import tkinter` | stdlib | ✅ |
 
-**Dependencies needed for future phases (not yet installed):**
-- `cryptography` — RSA-PSS/SHA-512 signatures, AES-GCM (Phase 3)
-- `pyotp` — TOTP generation (Phase 5)
-- `qrcode` — QR PNG enrollment (Phase 5)
-- `Pillow` — required by qrcode for PNG output (Phase 5)
+**Not yet installed (future phases):**
+- `cryptography` — AES-GCM, RSA-PSS/SHA-512, HKDF (Phases 2–3)
+- `pyotp`, `qrcode`, `Pillow` — TOTP MFA (Phase 6)
 
 ### 1.3 Launch Commands (VERIFIED vs README)
 
-**VERIFIED from `run.py:31-58` and `mitm.py:30-32`:**
-
-| Role | Correct command | README says | Mismatch? |
-|---|---|---|---|
-| Server | `python run.py <port>` | `python run.py port_number` | ✅ matches |
-| Client | `python run.py <ip> <port>` | `python run.py ip_address port_number` | ✅ matches |
-| MITM | `python mitm.py <server_ip> <port_1> <port_2>` | `python server_ip_address port_number_1 port_number_2` (script name omitted!) | ⚠️ README omits `mitm.py` — confirmed from `mitm.py:15-17` |
-
-**VERIFIED startup order:** MITM must be started AFTER the server binds (MITM calls
-`conn_server.connect()` at startup, before waiting for any client). The client must be
-started AFTER MITM is ready. So order is always: **Server → MITM → Client**.
-
-### 1.4 DH Parameter Generation and Transmission
-
-**VERIFIED from `diffie_hellman.py`:**
-
-| Item | How | Security note |
+| Role | Correct command | README note |
 |---|---|---|
-| Prime `p` | `RSA.generate(2048).p` — extracts the prime factor of a 2048-bit RSA key. Result is ≈1024-bit prime. | ✅ 1024-bit prime is weak by 2024 standards; NIST recommends ≥2048-bit DH group. |
-| Generator `g` | `randint(p//2, p-1)` — a random large integer. | ⚠️ **Not a primitive root modulo p.** The chosen `g` may only generate a small subgroup. Cryptographically problematic; acceptable only as a learning demo. |
-| Private exponent | `randint(p//2, p-1)` — same distribution as `g`. | ✅ Large enough to resist brute force at this prime size. |
-| Public value | `pow(g, private_exponent, p)` — standard modular exponentiation. | ✅ Correct formula. |
+| Server | `python run.py <port>` | ✅ matches |
+| Client | `python run.py <ip> <port>` | ✅ matches |
+| MITM | `python mitm.py <server_ip> <port_1> <port_2>` | README omits the script name `mitm.py` — confirmed from `mitm.py:15-17` |
 
-**Wire protocol (VERIFIED from `run.py:38-54`):**
-```
-Server → Client:  str(p)   [one newline-terminated base64 line]
-Server → Client:  str(g)   [one newline-terminated base64 line]
-Server → Client:  str(A)   [one newline-terminated base64 line]
-Client → Server:  str(B)   [one newline-terminated base64 line]
-```
-Numbers are sent as decimal strings, then base64-encoded by `network.py`.
+**VERIFIED startup order:** Server → MITM → Client (MITM connects to server at startup).
 
-**Receiver validation: NONE.** VERIFIED: the client does `p = int(get_line())` with
-no checks on primality, generator validity, or value ranges. This is exactly what
-"parameter injection" exploits.
+### 1.4 DH Parameters (VERIFIED from `diffie_hellman.py`)
 
-**Parameter injection** (VERIFIED from `mitm.py:54-74`):
-Mallory intercepts `p, g, A` from the server. She creates her own `DiffieHellman(p, g)`,
-computes `B_server` (her own public value), and sends **that** to the server in place of
-the client's real B. She simultaneously creates a second `DiffieHellman(p, g)`, computes
-`A_client` (another forged value), and sends `p, g, A_client` to the client in place of
-the server's real A. Result: two independent shared secrets, one per side, both known
-only to Mallory.
+| Item | How | Weakness |
+|---|---|---|
+| Prime `p` | `RSA.generate(2048).p` → ≈1024-bit factor | Weak by 2024 NIST standards |
+| Generator `g` | `randint(p//2, p-1)` | **Not a primitive root** — may generate a small subgroup |
+| Private exponent | `randint(p//2, p-1)` | Should use `secrets.randbelow` |
+| Public value | `pow(g, priv, p)` | Correct formula |
 
-### 1.5 Key Derivation and Cipher (VERIFIED from `crypto_protocol.py`)
+**Receiver validation: NONE.** `int(get_line())` with no checks. This is the parameter injection vulnerability.
 
-**Key derivation:**
-```
-shared_secret (int)  →  str(shared_secret).encode('utf-8')
-                     →  SHA-256 hex digest (64 hex chars = 32 bytes)
-                     →  bytes.fromhex(...)   →  32 bytes
-                     →  first 16 bytes = AES key
-                     →  last  16 bytes = IV
-```
+### 1.5 Cipher, Key Derivation, and Weaknesses (VERIFIED)
 
-**Cipher:** AES-128-CBC (hand-rolled from AES-128-ECB as a black box).
+| Item | Original | Weakness |
+|---|---|---|
+| KDF | `SHA256(str(shared_secret))` → first 16 bytes = key, last 16 = IV | IV is fixed per session; decimal-string conversion is non-standard |
+| Cipher | **AES-128-CBC** (hand-rolled from ECB) | No authentication tag; bit-flip attacks possible; fixed IV leaks repeated-prefix patterns |
+| Padding | Custom PKCS#7 | Specific exception type could enable padding-oracle in network scenario |
 
-**Weaknesses:**
-1. **AES-128, not AES-256.** Key is first 16 bytes of SHA-256 output (128 bits). Acceptable but not modern best practice.
-2. **Fixed IV.** IV is derived from the shared secret and is the same for every message in a session. CBC with fixed IV leaks information about messages that share a common prefix.
-3. **No authentication tag.** AES-CBC provides no integrity check. An active attacker can flip bits in ciphertext and cause predictable plaintext changes (CBC bit-flip attack). There is no MAC or HMAC.
-4. **Key derivation is `str(int)`.** Converting the integer to a decimal string before hashing is non-standard and wasteful; HKDF from the raw integer bytes is the modern approach.
-5. **Custom CBC implementation.** Manually reimplementing CBC around ECB is fragile and easy to get wrong (as evidenced by the Python 2→3 porting bugs in the original).
-6. **PKCS#7 padding oracle potential.** A custom unpad function that raises a specific `PaddingException` can enable padding oracle attacks in some network scenarios.
-
-### 1.6 Message Framing and Wire Protocol (VERIFIED from `network.py`)
+### 1.6 Wire Protocol (VERIFIED)
 
 ```
-Wire format per message:
-  base64_encode(payload_bytes) + b'\n'
+Every message:  base64_encode(utf8(payload)) + b'\n'
 
-Payload for handshake:    UTF-8 bytes of decimal integer string
-Payload for chat:         hex string of raw AES-CBC ciphertext
-                          (hex string then UTF-8 encoded, then base64 encoded)
-
-Receiver reads byte-by-byte until '\n', strips, base64-decodes, UTF-8 decodes.
+Handshake payloads: decimal strings of large integers (p, g, A, B)
+Chat payloads:      hex string of AES-CBC ciphertext bytes
 ```
 
-Note: the "double encoding" (hex → UTF-8 → base64) is our Phase 0 compatibility
-choice. The original Python 2 code encoded raw binary directly as base64. Both work;
-the hex layer is explicit and easy to debug.
-
-### 1.7 What `mitm.py` Does (Step by Step, VERIFIED)
+### 1.7 What `mitm.py` Does (VERIFIED, line by line)
 
 ```
-mitm.py server_ip server_port client_port
-
-Step 1: conn_client.listen(client_port)        — bind to client_port, wait for Alice
-Step 2: conn_server.connect(server_ip, server_port)  — connect to real Bob
-Step 3: recv p, g, A from Bob (3 lines)        — learn server's DH broadcast
-Step 4: Create dh_server = DiffieHellman(p, g)  — Mallory's DH toward Bob
-        Compute B_server = Mallory's public value
-Step 5: Send str(B_server) to Bob              — Bob thinks this is Alice's B
-        Bob now computes K1 = g^(b · mallory_s) mod p
-Step 6: p_client = p_server, g_client = g_server  — reuse same params
-Step 7: Create dh_client = DiffieHellman(p, g)  — Mallory's DH toward Alice
-        Compute A_client = Mallory's public value
-Step 8: Send str(p), str(g), str(A_client) to Alice — Alice gets FORGED A
-        Alice computes K2 = g^(a · mallory_c) mod p
-Step 9: Recv str(B_client) from Alice          — Alice's real public value
-        Compute K2 fully. Mallory now holds K1 (with Bob) and K2 (with Alice).
-
-Relay loop (two threads):
-  Thread 1: recv from server → cp_server.decrypt() → display in MITM GUI
-            → cp_client.encrypt() → send to client
-  Thread 2: recv from client → cp_client.decrypt() → display in MITM GUI
-            → cp_server.encrypt() → send to server
+Step 1  conn_client.listen(client_port)           — wait for Alice
+Step 2  conn_server.connect(server_ip, server_port)— connect to Bob
+Step 3  recv p, g, A from Bob
+Step 4  dh_server = DiffieHellman(p, g)
+        compute B_server (Mallory's DH value toward Bob)
+        send B_server to Bob   ← Bob now shares K1 with Mallory
+Step 5  dh_client = DiffieHellman(p, g)
+        compute A_client (Mallory's DH value toward Alice)
+        send p, g, A_client to Alice  ← Alice gets FORGED public value
+Step 6  recv B_client from Alice   ← Alice shares K2 with Mallory
+Relay:  recv from client → decrypt K2 → print plaintext → re-encrypt K1 → send to server
+        recv from server → decrypt K1 → print plaintext → re-encrypt K2 → send to client
 ```
 
-Alice and Bob see no difference. Only Mallory's GUI window shows plaintext of every message.
+### 1.8 GUI Needed?
 
-### 1.8 Is the GUI Needed for the Demo?
-
-**VERIFIED:** Both `run.py` and `mitm.py` unconditionally start a `GUIThread` and
-later call `gui.add_new_text()` in the receive loop. Removing the GUI requires
-either commenting out these calls or adding a `--no-gui` flag.
-
-**Recommendation:** Keep the GUI for the live demo (it's visually compelling). Add a
-`--no-gui` flag in Phase 1 for automated testing. The two headless test scripts
-already bypass the GUI entirely.
+**VERIFIED:** Both `run.py` and `mitm.py` unconditionally start a GUI thread. The
+`--no-gui` flag added in Phase 1 switches to a stdin reader thread (subprocess-driveable)
+for automated testing. Keep GUI for the live demo.
 
 ---
 
 ## PART 2 — DECISIONS AND ASSUMPTIONS
 
-| # | Question / Decision | Our Default | Rationale |
+| # | Decision | Default | Rationale |
 |---|---|---|---|
-| D1 | Python target version | **3.13** (system version) | Already on the machine; venv active |
-| D2 | Keep GUI or drop it? | **Keep GUI + add `--no-gui`** | Demo impact; automated tests use headless scripts |
-| D3 | DH group: toy vs RFC 3526 2048-bit? | **RFC 3526 2048-bit MODP in `--secure` mode; keep toy in vulnerable mode** | Toy for explanation, real for security claim |
-| D4 | `--toy-params` flag? | **Yes**, but only in Phase 2 commit | Lets the first demo minute use small numbers |
-| D5 | RSA vs ECDSA for signatures? | **RSA-PSS / SHA-512** | Matches IS syllabus Unit IV explicitly; `cryptography` library |
-| D6 | Key bit size? | **RSA-2048** | Standard; fast enough on lab machines |
-| D7 | How are public keys pre-shared? | **Files on disk (`alice_pub.pem`, `bob_pub.pem`), generated by `gen_keys.py` before demo** | Simplest for a local lab demo; explain in viva that real-world uses certificates/PKI |
-| D8 | Symmetric cipher after Phase 2 | **AES-256-GCM via `cryptography` library** | Authenticated encryption; eliminates bit-flip + padding oracle risks |
-| D9 | Key derivation after Phase 2 | **SHA-256 of DH secret bytes** (simple) or **HKDF-SHA-256** (better) | Use HKDF; one-line extra, looks professional, maps to Unit IV |
-| D10 | MFA scope | **TOTP only (RFC 6238)** | `pyotp` is trivial; scope is bounded; maps to Unit IV |
-| D11 | MFA storage | **JSON file per user (`users.json`)** | Local lab; no database needed |
-| D12 | Lockout policy | **3 failed TOTP attempts → 30-second cooldown** | Simple, demonstrable |
-| D13 | AVISPA installation | **Try local install first; web interface fallback** | Web at `https://avispa-project.org/` exists; document both |
-| D14 | `venv` name | `venv/` in repo root | Already created |
-| D15 | `.pem` files in `.gitignore`? | **Yes — add `*.pem` and `users.json`** | Security hygiene; never commit keys |
+| D1 | Python target | **3.13** | System version; venv active |
+| D2 | GUI | **Keep + `--no-gui`** | Demo impact; tests use `--no-gui` |
+| D3 | DH group | **RFC 3526 2048-bit MODP in all modes** | No `--toy-params`; group is pre-computed constant |
+| D4 | `--toy-params`? | **Dropped** | Jupyter notebook from reference repo is sufficient for the math explanation; adds complexity without benefit |
+| D5 | Signature scheme | **RSA-PSS / SHA-512** | Matches IS syllabus Unit IV; `cryptography` library |
+| D6 | Key size | **RSA-2048** | NIST recommended minimum |
+| D7 | Public key distribution | **Files on disk, generated by `gen_keys.py` before demo; NO PEM committed** | Local lab; see PEM policy below |
+| D8 | Symmetric cipher (Phase 2+) | **AES-256-GCM** | Authenticated encryption; eliminates CBC weaknesses |
+| D9 | KDF (Phase 2+) | **HKDF-SHA-256** | RFC 5869 standard |
+| D10 | MFA scope | **TOTP (RFC 6238), inside AES-GCM channel** | After DH handshake; channel protects OTP transit |
+| D11 | MFA storage | **`users.json`, never committed** | Local demo |
+| D12 | Lockout | **3 failures → 30-second cooldown** | Demonstrable |
+| D13 | AVISPA | **Try local install (WSL); web interface fallback** | Phase 5 |
+| D14 | HandshakeError | **Raised by library, caught by `run.py`** | Library code never calls `sys.exit` |
+| D15 | PEM policy | **`*.pem` in `.gitignore`; no PEM committed, including public keys; `gen_keys.py` refuses to overwrite** | Security hygiene; key distribution discussed in viva |
+
+**Phase ordering:** 0 → 1 → 2 → 3 → 4 → **5 (AVISPA)** → **6 (MFA)** → 7
 
 **Open questions for the team:**
 1. ⚠️ Exact deadline and deliverable format (confirm with faculty).
-2. ⚠️ Group size (plan assumes 4 members).
-3. ⚠️ Does the faculty want the demo run from the same machine (localhost) or across two lab PCs?
-4. ⚠️ Is AVISPA pre-installed on lab machines, or must we use the web interface?
-5. ⚠️ Is the report in English, and how long (the context says 6–10 pages)?
+2. ⚠️ Group size (plan assumes 4; adjust roles accordingly).
+3. ⚠️ Demo on same machine or two lab PCs?
+4. ⚠️ Is AVISPA installed on lab machines?
+5. ⚠️ Report length — context says 6–10 pages; confirm.
 
 ---
 
@@ -215,246 +149,216 @@ already bypass the GUI entirely.
 
 ---
 
-### ✅ PHASE 0: Python 3 Port + Baseline (ALREADY DONE)
+### ✅ PHASE 0: Python 3 Port + Baseline
 
-**Goal:** Get the existing codebase running on Python 3 with zero new features.
-
-**Status: COMPLETED AND TESTED on 2026-09-30.**
+**Status: COMPLETE. Git tag: `phase-0` (commit `63b402d`).**
 
 #### What Was Changed
 
-| File | Change | Why |
-|---|---|---|
-| `network.py` | Removed `import pwn`; replaced `pwn.listen/remote` with stdlib `socket.socket`; replaced Python 2 `'base64'` codec with `import base64; base64.b64encode/decode()` | pwntools unreliable on Windows; stdlib socket is portable and zero-dependency |
-| `diffie_hellman.py` | `print "..."` → `print(...)` × 6; `p/2` → `p//2` × 2; `RSAKey.key.p` → `RSAKey.p` | Py3 syntax; float division crash; pycryptodome API change |
-| `crypto_protocol.py` | `print "..."` → `print(...)` × 1; `''.join(chr(...))` → `bytes(...)`; `ord(data[i])` removed (bytes-index gives int); all `str` accumulators → `bytes`; `/` → `//` × 3; `h.update(str(key))` → `h.update(str(key).encode('utf-8'))`; `a2b_hex(h.hexdigest())` → `bytes.fromhex(h.hexdigest())`; `encrypt()` returns `.hex()` string; `decrypt()` accepts hex string via `bytes.fromhex()` | Comprehensive bytes/str fix; makes network layer simple (everything UTF-8 text) |
-| `gui.py` | `import Tkinter` → `import tkinter as Tkinter`; `print "..."` → `print(...)` × 1 | Module renamed in Py3 |
-| `run.py` | `print "..."` → `print(...)` × 4 | Py3 syntax only |
-| `mitm.py` | `print "..."` → `print(...)` × 3 | Py3 syntax only |
+| File | Change |
+|---|---|
+| `network.py` | Removed `pwntools`; stdlib `socket` + `base64` |
+| `diffie_hellman.py` | `print()`, `//`, `RSAKey.p` |
+| `crypto_protocol.py` | Full bytes/str fix; `//`; `bytes.fromhex`; `encrypt()` → hex string; `decrypt()` ← hex string |
+| `gui.py` | `tkinter` (lowercase); `print()` |
+| `run.py` | `print()` only |
+| `mitm.py` | `print()` only |
 
-#### New Files Added in Phase 0
+#### New Files
 
 | File | Purpose |
 |---|---|
-| `requirements.txt` | Pins `pycryptodome==3.23.0`; install with `venv\Scripts\pip install -r requirements.txt` |
-| `venv/` | Python 3.13 virtual environment (not committed to git) |
-| `headless_test.py` | Integration test: two threads, full DH handshake + 3-message echo, no GUI |
-| `headless_mitm_test.py` | MITM integration test: three threads, parameter injection, proves Mallory reads plaintext |
+| `requirements.txt` | `pycryptodome==3.23.0` |
+| `headless_test.py` | Integration: DH + AES round-trip, no GUI |
+| `headless_mitm_test.py` | Integration: MITM parameter injection, no GUI |
+| `IMPLEMENTATION_PLAN.md` | This document |
 
-#### Test Results (VERIFIED, run on this machine)
+#### Verified Test Output
 
 ```
 $ venv\Scripts\python diffie_hellman.py
-[+] DH self-test passed          ← 1024-bit prime generated, sA == sB asserted
+[+] DH self-test passed
 
 $ venv\Scripts\python crypto_protocol.py
 [+] CBC decrypt(encrypt(text))==text test passed
 
 $ venv\Scripts\python headless_test.py
-[+] Server received:  Hello from client! / Secret message 42 / Python 3 works!
-[+] Client received echoes: ECHO:Hello from client! / ECHO:Secret message 42 / ECHO:Python 3 works!
 [PASS] All messages round-tripped correctly.
 
 $ venv\Scripts\python headless_mitm_test.py
 [MITM] Intercepted: Attack at dawn
 [MITM] Intercepted: Bank PIN is 1234
 [MITM] Intercepted: Top secret data
-[+] MITM captured 3/3 messages in plaintext
-[+] Server ultimately received all 3 messages
 [PASS] MITM attack succeeded — unauthenticated DH is broken.
 ```
 
-#### Manual GUI Verification (requires 3 separate terminals)
+#### ⚠️ GUI Check (run manually before marking done)
 
 ```powershell
-# Activate venv in every terminal first:
-cd c:\Users\ASUS\Desktop\Harsh\PROJECTS\IS_FA2\DiffieHellman_V2
-venv\Scripts\activate
-
-# Terminal 1 — Server
-python run.py 9000
-
-# Terminal 2 — Client (after server window appears)
-python run.py 127.0.0.1 9000
-
-# Terminal 3 (MITM scenario) — after restarting server:
-python mitm.py 127.0.0.1 9000 9001
-# Terminal 4 (client connects to MITM):
-python run.py 127.0.0.1 9001
-```
-
-#### Go / No-Go Criterion
-
-✅ **GO** — all four automated tests pass. The fallback (rewrite ~150-line version from scratch)
-is **not needed**.
-
-#### Suggested Commit
-
-```
-git add network.py diffie_hellman.py crypto_protocol.py gui.py run.py mitm.py
-git add requirements.txt headless_test.py headless_mitm_test.py
-git commit -m "phase-0: port to Python 3 (print, bytes/str, socket, pycryptodome)"
-git push origin feat/py3-port
+# Terminal 1:  venv\Scripts\activate && python run.py 9000
+# Terminal 2:  venv\Scripts\activate && python run.py 127.0.0.1 9000
+# Send messages; confirm both Tkinter windows show text.
 ```
 
 ---
 
-### 🔲 PHASE 1: `--secure` Flag Plumbing + Mode Banner
+### ✅ PHASE 1: `--secure` Flag Plumbing + Mode Banner + stdin Chat
 
-**Goal:** Add `--secure` argument to `run.py` and `mitm.py`. Both modes use identical
-networking; `--secure` is currently a no-op (just prints a banner). This sets up the
-switch point for Phase 3 without changing any crypto yet.
+**Status: COMPLETE. Git tag: `phase-1`.**
 
-**Branch:** `feat/secure-flag`
+#### Goal
 
-#### Files to Create/Modify
+Add `--secure` and `--no-gui` to both `run.py` and `mitm.py`. `--secure` is a no-op
+in this phase (banner only). `--no-gui` replaces the GUI thread with a stdin reader
+thread that subprocess-based tests can drive by writing lines to stdin.
 
-| File | Action |
+#### Files Modified
+
+| File | Changes |
 |---|---|
-| `run.py` | Modify: add `argparse`; parse `--secure` and `--no-gui`; print mode banner |
-| `mitm.py` | Modify: add `argparse`; parse `--secure` (will warn that attack is blocked in this mode); print banner |
+| `run.py` | `argparse`; `parse_args()`; `print_banner()`; `StdinReaderThread`; `--no-gui` guards |
+| `mitm.py` | `argparse`; `parse_args()`; `print_banner()`; `log_intercept()`; `--no-gui` guards |
 
-#### Function-Level Changes
+#### Files Created
 
-**`run.py`:**
+| File | Purpose |
+|---|---|
+| `tests/__init__.py` | Makes `tests/` a package |
+| `tests/test_args.py` | Unit tests for `parse_args()` and `print_banner()` |
+
+#### Design Notes
+
+**stdin reader thread (run.py, `--no-gui` path):**
 ```python
-# ADD at top (after imports):
-import argparse
-
-# ADD function:
-def parse_args():
-    """Parse CLI arguments. Returns Namespace with .port, .ip (client only), .secure, .no_gui."""
-    parser = argparse.ArgumentParser(description='DH Secure Chat')
-    parser.add_argument('args', nargs='+', help='port | ip port')
-    parser.add_argument('--secure', action='store_true',
-                        help='Enable RSA-signed DH (Phase 3+)')
-    parser.add_argument('--no-gui', action='store_true',
-                        help='CLI mode (for automated tests)')
-    return parser.parse_args()
-
-# REPLACE the bare sys.argv length check with parse_args() call.
-# REPLACE GUIThread launch with:
-#   if not args.no_gui: GUIThread().start()
-# REPLACE gui.add_new_text() call with:
-#   if not args.no_gui: gui.add_new_text(...) else: print(...)
+class StdinReaderThread(threading.Thread):
+    daemon = True
+    def run(self):
+        for line in sys.stdin:
+            text = line.rstrip('\n')
+            if text:
+                send_message(text)
+                print(f"[Me] {text}", flush=True)
 ```
+A subprocess test writes UTF-8 lines to the client's `stdin`; the thread picks them
+up and calls `send_message`. The server prints `[Other] <text>` to stdout which the
+test reads from the server's stdout pipe.
 
-**`mitm.py`:**
-```python
-# ADD at top:
-import argparse
-
-def parse_args():
-    """Returns Namespace with .server_ip, .server_port, .client_port, .secure, .no_gui."""
-    parser = argparse.ArgumentParser(description='DH MITM Proxy')
-    parser.add_argument('server_ip')
-    parser.add_argument('server_port', type=int)
-    parser.add_argument('client_port', type=int)
-    parser.add_argument('--secure', action='store_true')
-    parser.add_argument('--no-gui', action='store_true')
-    return parser.parse_args()
+**`--secure` banner (Phase 1 only — no crypto change):**
 ```
-
-**Banner function (add to both, or extract to a shared `utils.py`):**
-```python
-def print_banner(role: str, secure: bool):
-    mode = "SECURE (signed DH)" if secure else "VULNERABLE (unsigned DH)"
-    print(f"[*] Starting as {role} in {mode} mode.")
-    if not secure:
-        print("[!] WARNING: DH values are unauthenticated — MITM attack possible.")
+[*] DH Chat | Role: Server | Mode: SECURE (signed DH — Phase 3 not yet active)
 ```
+In Phase 3, this banner changes to `SECURE (signed DH — ACTIVE)` and the flag wires
+into the handshake functions.
 
-#### Step-by-Step Tasks
-
-1. Add `import argparse` to `run.py` and `mitm.py`.
-2. Write `parse_args()` in each file; replace `sys.argv` length checks.
-3. Add `print_banner()` call immediately after args are parsed.
-4. Guard GUI calls with `if not args.no_gui`.
-5. In `mitm.py`, if `args.secure`: print `"[MITM] Running in secure mode — will attempt attack (expect it to fail in Phase 4)"`.
-
-#### Verification
-
-```bash
-python run.py 9000 --secure
-# Expected: "[*] Starting as Server in SECURE (signed DH) mode."
-
-python run.py 9000
-# Expected: "[*] Starting as Server in VULNERABLE (unsigned DH) mode."
-#           "[!] WARNING: DH values are unauthenticated — MITM attack possible."
-
-python run.py 9000 --no-gui
-# Expected: banner printed; no Tkinter window opens; process blocks on conn.listen()
-```
-
-#### Automated Tests
-
-Add `tests/test_args.py`:
-```python
-# Verify that parse_args() returns correct Namespace for various argv combinations.
-# Use unittest.mock.patch('sys.argv', [...]) to simulate CLI.
-```
-
-#### Commit Message
-
-```
-git commit -m "phase-1: argparse --secure and --no-gui flags; mode banner; no crypto change"
-```
+**mitm.py `--secure` meaning:**  
+In Phase 1 it prints a banner only. In Phase 4 it will: (a) read the signed wire
+format from server and client, (b) strip the real signature, (c) substitute its own
+DH value with a garbage/replayed signature, and (d) forward to the other side. The
+endpoints will reject the forged signature and abort.
 
 ---
 
-### 🔲 PHASE 2: Crypto Modernization (AES-256-GCM + HKDF + 2048-bit MODP)
+### 🔲 PHASE 2: Crypto Modernization
 
-**Goal:** Replace AES-128-CBC (hand-rolled) with AES-256-GCM (authenticated encryption)
-and replace ad-hoc SHA-256 key derivation with HKDF. Upgrade DH parameters to RFC 3526
-2048-bit MODP group. The protocol remains **MITM-vulnerable** after this phase (no
-signatures yet). This phase is purely a crypto quality upgrade.
-
-**Why:** AES-GCM provides both confidentiality AND integrity. HKDF is the standard KDF.
-2048-bit is the NIST-recommended minimum. These changes directly map to IS Unit III and IV topics.
+**Goal:** AES-256-GCM, HKDF-SHA-256, RFC 3526 2048-bit MODP group everywhere.
+Protocol remains MITM-vulnerable (no signatures yet). `--toy-params` is dropped.
 
 **Branch:** `feat/modern-crypto`
 
-#### Files to Create/Modify
+#### Files to Modify
 
-| File | Action |
+| File | Change |
 |---|---|
-| `crypto_protocol.py` | Modify: replace custom CBC with AES-GCM; replace SHA-256 KDF with HKDF |
-| `diffie_hellman.py` | Modify: replace random prime with RFC 3526 2048-bit MODP group; add `--toy-params` path |
+| `diffie_hellman.py` | Replace random prime + random g with RFC 3526 constants; verify prime; `secrets.randbelow` |
+| `crypto_protocol.py` | Replace AES-128-CBC + SHA-256 KDF with AES-256-GCM + HKDF; drop PKCS#7 helpers |
 | `requirements.txt` | Add `cryptography>=42.0.0` |
+| `README.md` | Fix any wording that still says "AES-CBC" |
+| `DEMO.md` | Fix talk track (line "Wireshark shows only ciphertext" is fine; remove any CBC-specific claim) |
 
-#### Function-Level Changes
+#### `diffie_hellman.py` — Function Changes
 
-**`diffie_hellman.py`:**
 ```python
-# ADD: RFC 3526 2048-bit MODP group (decimal, p and g are constants)
-RFC3526_P = int("FFFFFFFFFFFFFFFFC90FDAA2...", 16)  # paste full hex from RFC
+import secrets
+from Crypto.PublicKey import RSA  # kept for generate_prime() in __main__ self-test only
+
+# RFC 3526 group 14 — 2048-bit MODP (https://www.rfc-editor.org/rfc/rfc3526#section-3)
+RFC3526_P = int(
+    "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"
+    "29024E088A67CC74020BBEA63B139B22514A08798E3404DD"
+    "EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"
+    "E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
+    "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"
+    "C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"
+    "83655D23DCA3AD961C62F356208552BB9ED529077096966D"
+    "670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B"
+    "E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9"
+    "DE2BCBF6955817183995497CEA956AE515D2261898FA0510"
+    "15728E5A8AACAA68FFFFFFFFFFFFFFFF", 16)
 RFC3526_G = 2
 
-# MODIFY DiffieHellman.__init__(p=None, g=None, toy=False):
-#   if toy:  use existing generate_prime() path (for demo explanation)
-#   else:    self.p = RFC3526_P; self.g = RFC3526_G
+def _verify_rfc3526_group() -> None:
+    """Assert p is 2048-bit and (p-1)/2 is prime. Called once at import."""
+    assert RFC3526_P.bit_length() == 2048, "p must be 2048 bits"
+    q = (RFC3526_P - 1) // 2
+    # Miller-Rabin is not imported here; we trust the RFC constant but at least
+    # check bit length and that g^q ≡ 1 (mod p) [order-q subgroup].
+    assert pow(RFC3526_G, q, RFC3526_P) == 1, "g must be in the order-q subgroup"
 
-# Private exponent: use secrets.randbelow(p) instead of randint (more secure CSPRNG)
+_verify_rfc3526_group()   # runs at import time
+
+class DiffieHellman:
+    def __init__(self, p=None, g=None):
+        """
+        If p/g provided (client path): MUST equal RFC 3526 constants or raise ValueError.
+        If not provided (server path): use RFC 3526 constants.
+        Private exponent: fresh secrets.randbelow(RFC3526_P) per instance.
+        """
+        if p is not None:
+            if p != RFC3526_P or g != RFC3526_G:
+                raise ValueError(
+                    "Rejected: p/g do not match RFC 3526 2048-bit MODP group. "
+                    "Possible parameter injection attack.")
+        self.p = RFC3526_P
+        self.g = RFC3526_G
+        self.private_exponent = secrets.randbelow(RFC3526_P - 2) + 2  # in [2, p-2]
+
+    def generate_public_broadcast(self) -> tuple:
+        return self.p, self.g, pow(self.g, self.private_exponent, self.p)
+
+    @staticmethod
+    def validate_public_value(value: int, p: int) -> None:
+        """Raise ValueError if value is outside (1, p-1) — prevents small-subgroup attack."""
+        if not (1 < value < p - 1):
+            raise ValueError(f"Received DH public value {value!r} is out of range (1, p-1).")
+
+    def get_shared_secret(self, public_share: int) -> int:
+        self.validate_public_value(public_share, self.p)
+        return pow(public_share, self.private_exponent, self.p)
 ```
 
-**`crypto_protocol.py`:**
+**`run.py` client path change:** after `A = int(get_line())`, call
+`DiffieHellman.validate_public_value(A, RFC3526_P)` before accepting the value.
+
+#### `crypto_protocol.py` — Class Rewrite
+
 ```python
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
-import os
+import os, secrets
 
 class CryptoProtocol:
     def __init__(self, shared_secret: int):
         raw = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')
         # HKDF-SHA-256 → 32 bytes → AES-256 key
+        # Why HKDF: standard KDF (RFC 5869); stretches non-uniform DH secret to uniform key
         hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'dh-chat-v2')
         self.key = hkdf.derive(raw)
 
     def encrypt(self, data: str) -> str:
-        nonce = os.urandom(12)           # 96-bit GCM nonce; must be unique per message
+        nonce = os.urandom(12)                     # 96-bit GCM nonce; unique per message
         ct = AESGCM(self.key).encrypt(nonce, data.encode('utf-8'), None)
-        return (nonce + ct).hex()        # nonce || ciphertext; return as hex string
+        return (nonce + ct).hex()
 
     def decrypt(self, data: str) -> str:
         raw = bytes.fromhex(data)
@@ -463,46 +367,47 @@ class CryptoProtocol:
         return pt.decode('utf-8')
 ```
 
-#### Verifying MITM Vulnerability Is Still Present
+Keep the old `AES_128_CBC_*` and PKCS#7 functions **only** if the `--main` self-test
+in `crypto_protocol.py` still needs them; otherwise delete them.
 
-After Phase 2, run `headless_mitm_test.py`. It must still print `[PASS] MITM attack succeeded`.
-If it does not, stop and investigate before proceeding. This is the go/no-go for Phase 3.
+#### Verifying MITM Vulnerability Is Still Present (Go/No-Go)
+
+```bash
+venv\Scripts\python headless_mitm_test.py
+# Must still print: [PASS] MITM attack succeeded
+```
+If this fails, stop and investigate before Phase 3.
 
 #### Automated Tests
 
 ```python
 # tests/test_crypto_v2.py
-# 1. test_encrypt_decrypt_roundtrip(): cp.decrypt(cp.encrypt("hello")) == "hello"
-# 2. test_tamper_detection(): flip one byte in ciphertext → decrypt raises InvalidTag
-# 3. test_nonce_uniqueness(): two encrypts of same text → different hex output
-# 4. test_key_derivation_deterministic(): same shared_secret → same key
+# 1. test_roundtrip(): cp.decrypt(cp.encrypt("hello")) == "hello"
+# 2. test_tamper_detection(): flip one byte in hex → decrypt raises InvalidTag
+# 3. test_nonce_uniqueness(): same plaintext encrypted twice → different hex
+# 4. test_key_deterministic(): same shared_secret → same key
+# 5. test_rfc3526_group(): DiffieHellman() uses RFC3526_P and RFC3526_G
+# 6. test_bad_params_rejected(): DiffieHellman(p=bad, g=2) raises ValueError
+# 7. test_public_value_range(): validate_public_value(0, p) raises ValueError
+#                               validate_public_value(p-1, p) raises ValueError
 ```
 
-#### Expected Output
-
-```bash
-python -m pytest tests/test_crypto_v2.py -v
-# 4 passed in < 1s
-python venv\Scripts\python headless_mitm_test.py
-# [PASS] MITM attack succeeded — unauthenticated DH is broken.
-```
-
-#### Commit Message
+#### Commit
 
 ```
-git commit -m "phase-2: AES-256-GCM, HKDF-SHA-256, RFC 3526 2048-bit MODP; MITM still works"
+git commit -m "phase-2: AES-256-GCM, HKDF-SHA-256, RFC 3526 2048-bit MODP; reject bad params; MITM still works"
 ```
 
 ---
 
-### 🔲 PHASE 3: Signature Layer (`--secure` becomes real)
+### 🔲 PHASE 3: Signature Layer (`--secure` Activates)
 
-**Goal:** When `--secure` is passed, each side signs its DH public value with RSA-PSS/SHA-512
-and verifies the other's signature before computing the shared secret. MITM fails because
-Mallory cannot forge signatures.
+**Goal:** When `--secure` is passed, the handshake is authenticated with RSA-PSS/SHA-512
+and domain-separated signed data. The protocol rejects any p/g that isn't the RFC 3526
+group and validates received public values before trusting them.
 
-**Why RSA-PSS/SHA-512:** Maps directly to IS Unit III (RSA) and Unit IV (SHA-512,
-digital signatures). PSS is the modern, secure RSA padding scheme (as opposed to PKCS#1v1.5).
+**Why RSA-PSS/SHA-512:** Maps to IS Unit III (RSA) and Unit IV (SHA-512, digital signatures).
+PSS is the provably-secure RSA padding scheme.
 
 **Branch:** `feat/signed-dh`
 
@@ -510,34 +415,42 @@ digital signatures). PSS is the modern, secure RSA padding scheme (as opposed to
 
 | File | Action |
 |---|---|
-| `auth_dh.py` | **CREATE**: signature helpers (sign, verify, load/save keys) |
-| `gen_keys.py` | **CREATE**: one-shot key generation script |
-| `crypto_protocol.py` | **MODIFY**: add `secure_handshake_server()` and `secure_handshake_client()` |
-| `run.py` | **MODIFY**: call secure handshake when `args.secure` |
-| `mitm.py` | **MODIFY**: attempt attack in secure mode; catch/print verification failure |
-| `.gitignore` | **MODIFY**: add `*.pem`, `users.json` |
-| `requirements.txt` | Ensure `cryptography>=42.0.0` present |
+| `auth_dh.py` | **CREATE**: sign, verify, load/save keys, `HandshakeError` |
+| `gen_keys.py` | **CREATE**: generate RSA-2048 key pairs; refuse to overwrite |
+| `crypto_protocol.py` | **ADD**: `secure_handshake_server()`, `secure_handshake_client()` |
+| `run.py` | **MODIFY**: call secure handshake in `--secure` mode; catch `HandshakeError` |
+| `mitm.py` | **NO CHANGE** to handshake in Phase 3; Phase 4 adds forgery |
+| `.gitignore` | **ADD**: `*.pem` (all PEM files, including public keys) |
+| `requirements.txt` | Confirm `cryptography>=42.0.0` present |
 
-#### Function-Level Changes
+#### `auth_dh.py` — Complete API
 
-**`auth_dh.py` (new file):**
 ```python
-# Signature module for DH authentication (IS Unit III: RSA; Unit IV: SHA-512)
-
+"""
+auth_dh.py: RSA-PSS/SHA-512 signing for DH authentication.
+Why PSS: provably secure; PKCS#1-v1.5 has known weaknesses.
+Why SHA-512: maps to IS Unit IV topic SHA-512.
+"""
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.exceptions import InvalidSignature
 
-_PSS = padding.PSS(mgf=padding.MGF1(hashes.SHA512()), salt_length=padding.PSS.MAX_LENGTH)
+class HandshakeError(Exception):
+    """Raised when signature verification fails during DH handshake.
+    Callers (run.py) must catch this, print an abort message, and close the socket.
+    Library code (auth_dh, crypto_protocol) must NOT call sys.exit()."""
+
+_PSS = padding.PSS(mgf=padding.MGF1(hashes.SHA512()),
+                   salt_length=padding.PSS.MAX_LENGTH)
 
 def generate_keypair(bits: int = 2048) -> tuple:
-    """Generate RSA-2048 key pair. Returns (private_key, public_key)."""
+    """Generate RSA key pair. Returns (private_key, public_key)."""
 
 def save_private_key(private_key, path: str) -> None:
-    """Save private key as PEM (PKCS8, unencrypted — demo only)."""
+    """Save unencrypted PKCS8 PEM. Demo only — real systems encrypt this."""
 
 def save_public_key(public_key, path: str) -> None:
-    """Save public key as PEM (SubjectPublicKeyInfo)."""
+    """Save SubjectPublicKeyInfo PEM."""
 
 def load_private_key(path: str):
     """Load private key from PEM file."""
@@ -546,306 +459,247 @@ def load_public_key(path: str):
     """Load public key from PEM file."""
 
 def sign(private_key, data: bytes) -> bytes:
-    """Sign data with RSA-PSS/SHA-512. Returns raw signature bytes."""
+    """RSA-PSS/SHA-512 sign. Returns raw signature bytes."""
 
-def verify(public_key, signature: bytes, data: bytes) -> bool:
-    """Verify RSA-PSS/SHA-512 signature. Returns True or False (never raises)."""
+def verify(public_key, signature: bytes, data: bytes) -> None:
+    """RSA-PSS/SHA-512 verify. Raises HandshakeError on failure.
+    Does not return a bool — callers must use try/except HandshakeError."""
 ```
 
-**`gen_keys.py` (new file):**
+#### `gen_keys.py`
+
 ```python
-# Run once before the demo: python gen_keys.py
-# Creates: alice_priv.pem, alice_pub.pem, bob_priv.pem, bob_pub.pem
+"""
+gen_keys.py — run ONCE before the demo:  python gen_keys.py
+Generates alice_priv.pem, alice_pub.pem, bob_priv.pem, bob_pub.pem.
+Refuses to overwrite any existing key file to prevent accidental key churn.
+"""
+import os
 from auth_dh import generate_keypair, save_private_key, save_public_key
 
 for name in ('alice', 'bob'):
+    priv_path = f'{name}_priv.pem'
+    pub_path  = f'{name}_pub.pem'
+    if os.path.exists(priv_path) or os.path.exists(pub_path):
+        print(f'[!] Keys for {name} already exist ({priv_path}, {pub_path}). '
+              f'Delete them manually if you really want to regenerate.')
+        continue
     priv, pub = generate_keypair()
-    save_private_key(priv, f'{name}_priv.pem')
-    save_public_key(pub, f'{name}_pub.pem')
-    print(f'[+] Keys generated: {name}_priv.pem, {name}_pub.pem')
-print('[!] Share only *_pub.pem with the other party. Keep *_priv.pem secret.')
+    save_private_key(priv, priv_path)
+    save_public_key(pub, pub_path)
+    print(f'[+] Generated: {priv_path}, {pub_path}')
+
+print('[!] Keys are NOT committed to git (*.pem is in .gitignore).')
+print('[!] Distribute *_pub.pem to the peer out-of-band (USB, face-to-face).')
 ```
 
-**`crypto_protocol.py` — new functions:**
+#### Signed Data Format and Domain Separation
+
+```
+Server signs:  b"server-hello" + A_bytes
+  Why "server-hello" label: domain separation — a valid server signature cannot be
+  replayed as a client signature, preventing cross-role replay.
+
+Client signs:  b"client-hello" + B_bytes + A_bytes
+  Why include A_bytes in client's signature: binds the client's reply to this specific
+  server hello. Prevents Mallory from replaying Bob's (B, sig_B) in a future session
+  with a different A.
+
+Both use:      A_bytes = server's DH public value as big-endian bytes
+               B_bytes = client's DH public value as big-endian bytes
+               (integers converted with .to_bytes((n.bit_length()+7)//8, 'big'))
+```
+
+#### Wire Order (Secure Mode)
+
+```
+Server → Client:  A_hex        (str: big-endian bytes of A as hex)
+Server → Client:  sig_A_hex    (str: signature bytes as hex)
+Client verifies:  verify(bob_pub, sig_A, b"server-hello" + bytes.fromhex(A_hex))
+                  → raises HandshakeError if wrong
+Client → Server:  B_hex
+Client → Server:  sig_B_hex    (signature over b"client-hello" + B_bytes + A_bytes)
+Server verifies:  verify(alice_pub, sig_B, b"client-hello" + B_bytes + A_bytes)
+                  → raises HandshakeError if wrong
+Both compute:     K = get_shared_secret(peer_value)
+                  → validate_public_value() called inside get_shared_secret
+```
+
+#### Handshake Functions in `crypto_protocol.py`
+
 ```python
 def secure_handshake_server(conn, dh, own_priv_key, peer_pub_key) -> 'CryptoProtocol':
     """
-    Server-side secure DH handshake:
-      1. Compute A = g^a mod p
-      2. Sign A_bytes with own_priv_key (RSA-PSS/SHA-512)
-      3. Send A_bytes, then sig_A (two separate network messages)
-      4. Recv B_bytes from client
-      5. Recv sig_B from client
-      6. Verify sig_B over (B_bytes + A_bytes) using peer_pub_key
-         → if fails: print error and sys.exit(1)
-      7. Compute shared secret; return CryptoProtocol(secret)
-    Args:
-      conn: network.Connection
-      dh:   DiffieHellman instance (already has p, g, private exponent)
-      own_priv_key: loaded RSA private key object
-      peer_pub_key: loaded RSA public key object (Alice's public key)
-    Returns:
-      CryptoProtocol ready for message encryption
+    Perform the server side of the signed DH handshake.
+    Uses RFC 3526 group (already set in dh).
+    Signs b"server-hello" + A_bytes with own_priv_key (RSA-PSS/SHA-512).
+    Receives B_hex + sig_B_hex; verifies sig over b"client-hello" + B_bytes + A_bytes.
+    Raises HandshakeError on any verification failure (caller must catch).
+    Returns: CryptoProtocol keyed to the shared secret.
     """
 
 def secure_handshake_client(conn, dh, own_priv_key, peer_pub_key) -> 'CryptoProtocol':
     """
-    Client-side secure DH handshake:
-      1. Recv A_bytes from server
-      2. Recv sig_A from server
-      3. Verify sig_A over A_bytes using peer_pub_key
-         → if fails: print error and sys.exit(1)
-      4. Compute B = g^b mod p; sign (B_bytes + A_bytes) with own_priv_key
-      5. Send B_bytes, then sig_B
-      6. Compute shared secret; return CryptoProtocol(secret)
-    Args: same pattern as secure_handshake_server
-    Returns: CryptoProtocol ready for message encryption
+    Perform the client side of the signed DH handshake.
+    Receives A_hex + sig_A_hex; verifies sig over b"server-hello" + A_bytes.
+    Signs b"client-hello" + B_bytes + A_bytes with own_priv_key.
+    Raises HandshakeError on any verification failure.
+    Returns: CryptoProtocol keyed to the shared secret.
     """
 ```
 
-**Wire message order (VERIFIED design from PROJECT_CONTEXT.md §4.2):**
-```
-Server → Client:  A_bytes            (DH public value as hex string)
-Server → Client:  sig_A.hex()        (raw signature bytes as hex string)
-Client → Server:  B_bytes            (DH public value as hex string)
-Client → Server:  sig_B.hex()        (signature over B_bytes + A_bytes as hex string)
-```
-This binds Bob's reply to Alice's specific A value, preventing replay of an old session.
+#### `run.py` Integration (Secure Mode)
 
-**`run.py` changes:**
 ```python
-# In server branch (len==2), replace:
-#   conn.send(str(p)); conn.send(str(g)); conn.send(str(A)); B=int(get_line())
-#   crypto_protocol = CryptoProtocol(dh.get_shared_secret(B))
-# With:
-if args.secure:
-    own_priv = load_private_key('bob_priv.pem')    # server is Bob
-    peer_pub  = load_public_key('alice_pub.pem')
-    crypto_protocol = secure_handshake_server(conn, dh, own_priv, peer_pub)
-else:
-    # original vulnerable path (unchanged)
+from auth_dh import load_private_key, load_public_key, HandshakeError
+from crypto_protocol import secure_handshake_server, secure_handshake_client
 
-# In client branch (len==3), replace similarly with secure_handshake_client()
-# server is Bob → load alice_priv.pem, bob_pub.pem
+if len(args.positional) == 1:   # server = Bob
+    ...
+    if args.secure:
+        try:
+            own_priv = load_private_key('bob_priv.pem')
+            peer_pub  = load_public_key('alice_pub.pem')
+            crypto_protocol = secure_handshake_server(conn, dh, own_priv, peer_pub)
+        except HandshakeError as e:
+            print(f"[SECURE] Signature verification FAILED: {e}")
+            print("[SECURE] Possible man-in-the-middle attack. Aborting connection.")
+            conn._sock.close()
+            sys.exit(1)
+        except FileNotFoundError as e:
+            print(f"[ERROR] Key file not found: {e}")
+            print("[ERROR] Run 'python gen_keys.py' first.")
+            sys.exit(1)
+    else:
+        # unchanged vulnerable path
+        ...
 ```
 
-**Abort message on verification failure:**
-```
-[SECURE] Signature verification FAILED.
-[SECURE] The DH public value you received was NOT signed by the expected key.
-[SECURE] Possible man-in-the-middle attack. Aborting connection.
-```
+Same pattern for the client branch (loads `alice_priv.pem`, `bob_pub.pem`).
 
-**`.gitignore` additions:**
+#### `.gitignore` Addition
+
 ```
-# Private keys — NEVER commit these
-*_priv.pem
-# Users database — contains hashed passwords
+# ALL PEM key files — never commit private OR public keys
+# Distribute *_pub.pem out-of-band (USB / face-to-face)
+*.pem
+# MFA user database
 users.json
 ```
-Public keys (`*_pub.pem`) are intentionally NOT ignored (they are meant to be shared).
-
-#### Step-by-Step Tasks
-
-1. Create `auth_dh.py` with all six functions. Unit-test each independently.
-2. Create `gen_keys.py`. Run it; verify 4 PEM files appear.
-3. Add `secure_handshake_server()` and `secure_handshake_client()` to `crypto_protocol.py`.
-4. Modify `run.py` server branch: if `args.secure` call `secure_handshake_server`.
-5. Modify `run.py` client branch: if `args.secure` call `secure_handshake_client`.
-6. Update `.gitignore`. Verify `git status` does NOT show `*_priv.pem`.
 
 #### Automated Tests
 
 ```python
 # tests/test_auth_dh.py
-# 1. test_sign_verify_roundtrip(): sign(priv, data) → verify(pub, sig, data) == True
-# 2. test_tampered_data_fails(): verify with wrong data → False
-# 3. test_wrong_key_fails(): verify with different public key → False
-# 4. test_sign_returns_bytes(): sig is bytes, len > 0
-# 5. test_secure_handshake_e2e(): two threads, secure handshake completes, shared key matches
+# 1.  test_sign_verify_roundtrip()
+# 2.  test_tampered_data_raises()
+# 3.  test_wrong_key_raises()
+# 4.  test_handshake_error_not_sys_exit(): verify raises HandshakeError not SystemExit
+# 5.  test_domain_separation(): sig made with "server-hello" does NOT verify under "client-hello"
+# 6.  test_client_sig_binds_A(): sig over (B + A1) does NOT verify under A2
+# 7.  test_gen_keys_no_overwrite(): gen_keys.py refuses if files exist
+# 8.  test_secure_handshake_e2e(): two threads, --secure, messages flow
 ```
 
-#### Commit Message
+#### Commit
 
 ```
-git commit -m "phase-3: RSA-PSS/SHA-512 signed DH in --secure mode; auth_dh.py; gen_keys.py"
+git commit -m "phase-3: RSA-PSS/SHA-512 signed DH; domain labels; HandshakeError; gen_keys.py; *.pem ignored"
 ```
 
 ---
 
-### 🔲 PHASE 4: Show the Attack Failing
+### 🔲 PHASE 4: Show the Attack Failing + Full MITM Forgery
 
-**Goal:** When MITM runs against `--secure` endpoints, Alice's verification step
-catches the forged DH value and aborts. Prove this with automated tests and demo output.
+**Goal:** `mitm.py --secure` actually implements the secure wire format (reads A_hex,
+sig_A_hex from server; sends B_hex, forged_sig_hex to client). The forgery uses
+Mallory's own signature (signed with a key Alice doesn't have) or a garbage byte string.
+Both endpoints detect the mismatch and abort with the `HandshakeError` path.
 
 **Branch:** `feat/attack-demo`
 
-#### Files to Create/Modify
+#### `mitm.py` — Secure Mode Handshake
 
-| File | Action |
-|---|---|
-| `mitm.py` | Modify: add logging for both modes; in `--secure` mode attempt the attack anyway |
-| `tests/test_secure_vs_mitm.py` | **CREATE**: end-to-end tests for all four scenarios |
-
-#### `mitm.py` Changes
+In `--secure` mode, `mitm.py` must speak the full signed wire format:
 
 ```python
-# In the relay loop (session function), print every intercepted message:
-print(f"[MITM][{name}] INTERCEPTED: {line}")
-
-# When --secure is set, add at the top of the key exchange section:
 if args.secure:
-    print("[MITM] Secure mode detected. Attempting attack anyway...")
-    print("[MITM] Note: this attack WILL be detected and aborted by the endpoints.")
+    print("[MITM] Secure mode: reading signed wire format; attempting forgery...")
 
-# The actual attack attempt happens naturally; mitm.py does not need to change
-# its logic because it cannot forge signatures. The connection simply dies when
-# the client or server calls sys.exit(1) after verification failure.
+    # --- Mallory ↔ Server (Bob) side ---
+    # Receive Bob's signed hello
+    A_hex     = get_line(conn_server)
+    sig_A_hex = get_line(conn_server)
+    # Mallory cannot verify this (she doesn't have Alice's key to check Bob's claim)
+    # but she READS it so the server doesn't hang.
+
+    # Create Mallory's own DH toward Bob
+    dh_s = DiffieHellman()
+    _, _, B_mal = dh_s.generate_public_broadcast()
+    B_mal_bytes = B_mal.to_bytes((B_mal.bit_length()+7)//8, 'big')
+
+    # FORGERY: Mallory signs with her own key (which Bob's verify() will reject)
+    # or sends a garbage signature — either way Bob's verify() raises HandshakeError.
+    forged_sig = b'\x00' * 256   # 256 zero bytes — obviously not a valid RSA-PSS sig
+    conn_server.send(B_mal_bytes.hex())
+    conn_server.send(forged_sig.hex())
+    print("[MITM] Sent forged B + garbage signature to server.")
+
+    # --- Mallory ↔ Client (Alice) side ---
+    # Alice's client will call verify(bob_pub, sig, b"server-hello" + A_bytes).
+    # Mallory forwards Bob's real A_hex but with a forged (garbage) sig.
+    # Or she substitutes her own A_mal with the same garbage sig.
+    # Either way, Alice's verify() will raise HandshakeError and abort.
+    A_mal = dh_s.generate_public_broadcast()[2]   # Mallory's A toward Alice
+    A_mal_bytes = A_mal.to_bytes((A_mal.bit_length()+7)//8, 'big')
+    conn_client.send(A_mal_bytes.hex())
+    conn_client.send(forged_sig.hex())
+    print("[MITM] Sent forged A + garbage signature to client.")
+    print("[MITM] Endpoints should now abort with HandshakeError.")
+    # No relay possible — both sides will disconnect
 ```
 
 #### Automated Tests (`tests/test_secure_vs_mitm.py`)
 
 ```python
-# 1. test_vulnerable_chat_works(): no MITM, --no-secure → messages arrive
-# 2. test_mitm_breaks_vulnerable(): with MITM, --no-secure → MITM reads plaintext
-# 3. test_secure_chat_works(): no MITM, --secure → messages arrive (signatures pass)
-# 4. test_mitm_fails_secure(): with MITM, --secure → client/server abort with clear message
-# 5. test_tampered_sig_fails(): manually corrupt sig bytes → verify returns False
-# 6. test_replayed_sig_fails(): use sig from session 1 in session 2 (A changes → sig invalid)
-# 7. test_wrong_peer_key_fails(): load wrong pub key → verify fails
+# 1. test_vulnerable_chat_works()       — no MITM, --no-gui, 3 messages received
+# 2. test_mitm_breaks_vulnerable()      — MITM reads plaintext in vulnerable mode
+# 3. test_secure_chat_works()           — no MITM, --secure, messages flow
+# 4. test_mitm_fails_secure()           — MITM, --secure → HandshakeError abort msg in stdout
+# 5. test_tampered_sig_rejected()       — manually corrupt one sig byte → HandshakeError
+# 6. test_replayed_sig_rejected()       — use sig(B+A1) for session with A2 → HandshakeError
+# 7. test_wrong_peer_key_rejected()     — verify with wrong public key → HandshakeError
+# 8. test_domain_label_enforced()       — "server-hello" sig won't pass "client-hello" check
 ```
 
-Each test uses `subprocess.Popen` or threads to simulate separate processes.
-
-#### Expected Output for Test 4
+#### Expected Abort Output (test 4)
 
 ```
-Server:  [SECURE] Signature verification FAILED.
-         [SECURE] Possible man-in-the-middle attack. Aborting connection.
-Client:  [SECURE] Signature verification FAILED.
-         [SECURE] Possible man-in-the-middle attack. Aborting connection.
-MITM:    [MITM] Secure mode detected. Attempting attack anyway...
-         [MITM] Connection closed by endpoint (signature check failed).
+[Server] [SECURE] Signature verification FAILED: ...
+[Server] [SECURE] Possible man-in-the-middle attack. Aborting connection.
+[Client] [SECURE] Signature verification FAILED: ...
+[Client] [SECURE] Possible man-in-the-middle attack. Aborting connection.
+[MITM]   Sent forged B + garbage signature to server.
+[MITM]   Sent forged A + garbage signature to client.
+[MITM]   Endpoints should now abort with HandshakeError.
 ```
 
-#### Commit Message
+#### Commit
 
 ```
-git commit -m "phase-4: MITM fails in --secure mode; full test suite for all 4 scenarios"
-```
-
----
-
-### 🔲 PHASE 5: MFA — TOTP Login
-
-**Goal:** Add a login step (`--mfa` flag) before the DH handshake. Client must supply
-a correct TOTP code (plus password). Server verifies both. Wrong code → reject. Three
-wrong codes → 30-second lockout.
-
-**Branch:** `feat/mfa`
-
-#### Files to Create/Modify
-
-| File | Action |
-|---|---|
-| `mfa.py` | **CREATE**: enrollment, login verification, lockout logic |
-| `users.json` | **CREATED at runtime** by enrollment; never committed |
-| `enroll.py` | **CREATE**: one-shot enrollment script (creates `users.json`, saves QR PNG) |
-| `run.py` | Modify: if `--mfa`, run login flow before DH handshake |
-| `requirements.txt` | Add `pyotp>=2.9.0`, `qrcode>=7.4`, `Pillow>=10.0` |
-
-#### Function-Level Changes (`mfa.py`)
-
-```python
-import pyotp, qrcode, hashlib, hmac, os, json, time
-
-# --- Enrollment ---
-def enroll_user(username: str, password: str, users_file: str = 'users.json') -> str:
-    """
-    Create a user record with PBKDF2-SHA512 hashed password and TOTP secret.
-    Saves to users.json. Returns QR URI for scanning.
-    Args: username, password (plaintext, hashed immediately), users_file path
-    Returns: TOTP provisioning URI (use qrcode to turn into PNG)
-    """
-
-def save_qr(uri: str, path: str) -> None:
-    """Render URI as QR code PNG. Args: URI string, output file path."""
-
-# --- Authentication ---
-def hash_password(password: str, salt: bytes) -> bytes:
-    """PBKDF2-HMAC-SHA512, 200000 iterations. Returns 64-byte digest."""
-
-def verify_login(username: str, password: str, totp_code: str,
-                 users_file: str = 'users.json') -> tuple[bool, str]:
-    """
-    Verify password + TOTP code. Enforces lockout after 3 failures.
-    Returns (True, '') on success or (False, reason_string) on failure.
-    Reason strings: 'USER_NOT_FOUND', 'WRONG_PASSWORD', 'WRONG_OTP', 'LOCKED_OUT'
-    """
-
-def _load_users(path: str) -> dict:   # internal
-def _save_users(users: dict, path: str) -> None:   # internal
-```
-
-**`enroll.py` (new file):**
-```python
-# python enroll.py alice
-# Prompts for password, creates users.json entry, saves alice_mfa_qr.png
-```
-
-**`run.py` MFA integration:**
-```python
-# Add --mfa flag to parse_args()
-# In server branch: if args.mfa, run MFA server-side verification
-#   recv username; recv password (ideally TLS-protected in real world, fine for demo)
-#   recv totp_code; verify; send 'OK' or 'FAIL'; on FAIL sys.exit(1)
-# In client branch: if args.mfa, prompt for username/password/totp_code; send to server
-```
-
-**Lockout implementation:**
-Store `failed_attempts` and `lockout_until` (Unix timestamp) in `users.json` per user.
-Reset on successful login.
-
-#### Verification
-
-```bash
-python enroll.py alice
-# → alice_mfa_qr.png created; scan with Google Authenticator / Authy
-
-python run.py 9000 --mfa
-python run.py 127.0.0.1 9000 --mfa
-# Client prompts: Username: alice; Password: ****; OTP code: 123456
-# With correct code: "[MFA] Login successful."
-# With wrong code: "[MFA] Wrong OTP code. X attempts remaining."
-# After 3 failures: "[MFA] Account locked. Try again after 30 seconds."
-```
-
-#### Automated Tests
-
-```python
-# tests/test_mfa.py
-# 1. test_enroll_creates_record(): enroll_user creates users.json with correct fields
-# 2. test_correct_login(): valid pw + valid TOTP → (True, '')
-# 3. test_wrong_password(): wrong pw → (False, 'WRONG_PASSWORD')
-# 4. test_wrong_otp(): right pw, wrong code → (False, 'WRONG_OTP')
-# 5. test_lockout_after_3_fails(): 3 × wrong OTP → (False, 'LOCKED_OUT')
-# 6. test_lockout_expires(): lockout_until in past → can try again
-# 7. test_hash_is_deterministic(): same pw + salt → same hash
-# 8. test_timing_safe(): use hmac.compare_digest (not ==) verified in source
-```
-
-#### Commit Message
-
-```
-git commit -m "phase-5: TOTP-based MFA login with PBKDF2-SHA512 and lockout; mfa.py; enroll.py"
+git commit -m "phase-4: mitm.py speaks secure wire format and attempts forgery; 8 scenario tests"
 ```
 
 ---
 
-### 🔲 PHASE 6: AVISPA Formal Verification
+### 🔲 PHASE 5: AVISPA Formal Verification
 
-**Goal:** Model both protocol variants in HLPSL and run OFMC (and/or CL-AtSe) to get
-UNSAFE (unauthenticated) and SAFE (authenticated) results. Screenshot outputs for slides.
+**Goal:** Model both protocol variants in valid HLPSL. Run OFMC (and CL-AtSe) to get
+UNSAFE + SAFE results. Screenshot outputs for slides and report.
+
+> ⚠️ **The HLPSL skeletons below were NOT run through AVISPA** (no AVISPA installation
+> was available during plan creation). They must be verified and debugged against a real
+> AVISPA binary or the web interface before submission. Do not include unrun results.
 
 **Branch:** `feat/avispa`
 
@@ -853,114 +707,359 @@ UNSAFE (unauthenticated) and SAFE (authenticated) results. Screenshot outputs fo
 
 | File | Purpose |
 |---|---|
-| `avispa/dh_unauth.hlpsl` | HLPSL model of unauthenticated DH (no signatures) |
-| `avispa/dh_auth.hlpsl` | HLPSL model of signature-authenticated DH |
-| `avispa/README_avispa.md` | How to install AVISPA, run models, interpret output |
-| `docs/avispa_unsafe.png` | Screenshot of OFMC output: UNSAFE |
-| `docs/avispa_safe.png` | Screenshot of OFMC output: SAFE |
+| `avispa/dh_unauth.hlpsl` | Unauthenticated DH — expected UNSAFE |
+| `avispa/dh_auth.hlpsl` | Signed DH — expected SAFE |
+| `avispa/README_avispa.md` | Install, run, interpret instructions |
+| `docs/avispa_unsafe.png` | OFMC screenshot (from actual run) |
+| `docs/avispa_safe.png` | OFMC screenshot (from actual run) |
 
-#### HLPSL Structure (Skeleton — MUST be adapted and run; do not submit unrun HLPSL)
-
-```hlpsl
-% dh_unauth.hlpsl
-% DH key exchange WITHOUT authentication.
-% Intruder model: Dolev-Yao (can intercept, replay, compose).
-% Goal: secrecy of the session key. Expected: UNSAFE (MITM attack found).
-
-role alice(A, B : agent,
-           G, P : text,
-           SND, RCV : channel(dy))
-played_by A def=
-  local  A_val, B_val, SK : text
-  init   A_val := exp(G, new())     % A = g^a mod p (abstracted)
-  transition
-    1. State = 0 /\ RCV(start) =|>
-       State' := 1 /\ SND(A_val)    % Send A unauthenticated
-    2. State = 1 /\ RCV(B_val) =|>
-       State' := 2 /\ SK' := exp(B_val, a)  % SK = B^a (not verified!)
-       /\ secret(SK', sec_alice_key, {A, B})
-end role
-
-% Similar role for bob, role session, role environment ...
-% goal section:
-goal
-  secrecy_of sec_alice_key
-end goal
-```
+#### `dh_unauth.hlpsl` — Valid HLPSL (UNRUN — must be tested)
 
 ```hlpsl
-% dh_auth.hlpsl
-% DH key exchange WITH RSA signatures.
-% Goal: secrecy + authentication. Expected: SAFE.
+%%% dh_unauth.hlpsl
+%%% Protocol: Unauthenticated Diffie-Hellman key exchange.
+%%% Intruder model: Dolev-Yao.
+%%% Expected result: UNSAFE (MITM attack trace found).
+%%%
+%%% Abstraction: g^a is modelled as a fresh value Ga (nonce).
+%%% The shared secret is modelled as the peer's public value (Gb or Ga)
+%%% because under Dolev-Yao the intruder can substitute it.
 
 role alice(A, B : agent,
-           Ka, Kb : public_key,   % Ka = Alice's key, Kb = Bob's key
-           G, P : text,
            SND, RCV : channel(dy))
 played_by A def=
-  ...
+
+  local  State   : nat,
+         Ga, Gb  : text
+
+  init   State := 0
+
   transition
-    1. State = 0 /\ RCV(start) =|>
-       State' := 1 /\ SND({A_val}_inv(Ka))    % A signed with Alice's private key
-    2. State = 1 /\ RCV({B_val, A_val}_inv(Kb)) =|>   % Bob's reply covers both
-       State' := 2 /\ SK' := exp(B_val, a)
-       /\ secret(SK', sec_alice_key, {A, B})
-       /\ request(A, B, alice_bob_dh, B_val)
+
+    1. State  = 0 /\ RCV(start) =|>
+       State' := 1
+       /\ Ga'  := new()
+       /\ SND(Ga')                          %% Alice sends A = g^a unauthenticated
+
+    2. State  = 1 /\ RCV(Gb?) =|>           %% Receive any value claiming to be g^b
+       State' := 2
+       /\ witness(A, B, alice_bob_a, Ga)
+       /\ secret(Gb, sec_k_alice, {A, B})   %% Alice believes Gb is secret with Bob
+
 end role
 
+
+role bob(A, B : agent,
+         SND, RCV : channel(dy))
+played_by B def=
+
+  local  State   : nat,
+         Ga, Gb  : text
+
+  init   State := 0
+
+  transition
+
+    1. State  = 0 /\ RCV(Ga?) =|>           %% Receive any value claiming to be g^a
+       State' := 1
+       /\ Gb'  := new()
+       /\ SND(Gb')                          %% Bob sends B = g^b unauthenticated
+       /\ request(B, A, alice_bob_a, Ga)
+       /\ secret(Ga, sec_k_bob, {A, B})     %% Bob believes Ga is secret with Alice
+
+end role
+
+
+role session(A, B : agent) def=
+  local SA, RA, SB, RB : channel(dy)
+  composition
+       alice(A, B, SA, RA)
+    /\ bob(A, B, SB, RB)
+end role
+
+
+role environment() def=
+  const alice, bob             : agent,
+        sec_k_alice, sec_k_bob : protocol_id,
+        alice_bob_a            : protocol_id,
+        start                  : protocol_id
+
+  intruder_knowledge = {alice, bob}
+
+  composition
+       session(alice, bob)
+    /\ session(alice, i)
+    /\ session(i, bob)
+
+end role
+
+
 goal
-  secrecy_of sec_alice_key
-  authentication_on alice_bob_dh
+  secrecy_of sec_k_alice, sec_k_bob
+  authentication_on alice_bob_a
 end goal
+
+environment()
 ```
+
+#### `dh_auth.hlpsl` — Valid HLPSL (UNRUN — must be tested)
+
+```hlpsl
+%%% dh_auth.hlpsl
+%%% Protocol: Signed Diffie-Hellman (our Phase 3 design).
+%%% Signed data:
+%%%   Server (Bob) signs: b"server-hello" || A
+%%%   Client (Alice) signs: b"client-hello" || B || A
+%%% Modelled with HLPSL public-key signing: {data}_inv(K) = signed with K.
+%%% Expected result: SAFE.
+
+role alice(A, B        : agent,
+           Ka, Kb      : public_key,
+           SND, RCV    : channel(dy))
+played_by A def=
+
+  local  State            : nat,
+         Ga, Gb           : text,
+         Server_label     : text,
+         Client_label     : text
+
+  init   State        := 0
+
+  transition
+
+    %%% Step 1: receive Bob's signed hello
+    1. State  = 0 /\ RCV(start) =|>
+       State' := 1
+       /\ Ga' := new()
+
+    %%% Alice waits for (Gb, sig_B) where sig_B = sign_Bob("server-hello" . Gb)
+    2. State  = 1 /\ RCV({xserver_label.Gb?}_inv(Kb)) =|>
+       State' := 2
+       /\ witness(A, B, alice_bob_ga, Ga)
+       /\ SND({xclient_label.Ga.Gb?}_inv(Ka))   %% Alice signs "client-hello" || Ga || Gb
+       /\ secret(Gb, sec_key, {A, B})
+
+end role
+
+
+role bob(A, B       : agent,
+         Ka, Kb     : public_key,
+         SND, RCV   : channel(dy))
+played_by B def=
+
+  local  State           : nat,
+         Ga, Gb          : text,
+         Server_label    : text,
+         Client_label    : text
+
+  init   State       := 0
+
+  transition
+
+    %%% Step 1: Bob sends his DH value signed with "server-hello" label
+    1. State  = 0 /\ RCV(start) =|>
+       State' := 1
+       /\ Gb' := new()
+       /\ SND({xserver_label.Gb'}_inv(Kb))      %% Bob signs "server-hello" || Gb
+
+    %%% Step 2: receive Alice's signed reply
+    2. State  = 1 /\ RCV({xclient_label.Ga?.Gb}_inv(Ka)) =|>
+       State' := 2
+       /\ request(B, A, alice_bob_ga, Ga)
+       /\ secret(Ga, sec_key, {A, B})
+
+end role
+
+
+role session(A, B : agent, Ka, Kb : public_key) def=
+  local SA, RA, SB, RB : channel(dy)
+  composition
+       alice(A, B, Ka, Kb, SA, RA)
+    /\ bob(A, B, Ka, Kb, SB, RB)
+end role
+
+
+role environment() def=
+  const alice, bob             : agent,
+        ka, kb                 : public_key,
+        sec_key                : protocol_id,
+        alice_bob_ga           : protocol_id,
+        start                  : protocol_id,
+        xserver_label          : text,
+        xclient_label          : text
+
+  intruder_knowledge = {alice, bob, ka, kb, xserver_label, xclient_label}
+
+  composition
+       session(alice, bob, ka, kb)
+    /\ session(alice, i, ka, ki)
+    /\ session(i, bob, ki, kb)
+
+end role
+
+
+goal
+  secrecy_of sec_key
+  authentication_on alice_bob_ga
+end goal
+
+environment()
+```
+
+#### Notes on the HLPSL Models
+
+1. **Not run** — these skeletons model the exact signed data per our Phase 3 design.
+   Syntax may need adjustment for the AVISPA version you install. Common issues:
+   `xserver_label` as a `text` constant vs a built-in; use of `?` pattern matching;
+   `ki` for the intruder's key needing a different declaration.
+2. **What the models do verify (if AVISPA accepts them):**
+   - `dh_unauth.hlpsl`: The intruder can substitute Ga/Gb freely → `sec_key` is not
+     secret → UNSAFE → attack trace shows parameter injection.
+   - `dh_auth.hlpsl`: The intruder cannot forge the public-key signature → cannot
+     produce `{xserver_label.forged_Gb}_inv(Kb)` without Kb's private key → SAFE.
+3. **What the models do NOT verify:** Implementation bugs, side channels, key loading
+   errors, the HKDF step, or any attacks outside the Dolev-Yao model.
 
 #### How to Run
 
-**Option A — Local AVISPA install (Linux/WSL):**
 ```bash
-# Download from http://www.avispa-project.org/
-cd avispa/
-./avispa --ofmc dh_unauth.hlpsl   # expect UNSAFE + attack trace
-./avispa --ofmc dh_auth.hlpsl     # expect SAFE
-./avispa --cl-atse dh_auth.hlpsl  # second back-end confirmation
+# Option A — local install (Linux or WSL):
+./avispa --ofmc avispa/dh_unauth.hlpsl
+./avispa --ofmc avispa/dh_auth.hlpsl
+./avispa --cl-atse avispa/dh_auth.hlpsl   # second back-end
+
+# Option B — web interface:
+# https://avispa-project.org/ → paste HLPSL → select OFMC → Verify
+# Screenshot the SUMMARY and DETAILS lines.
 ```
 
-**Option B — Web interface (if local install fails):**
-- Navigate to the AVISPA online tool (search "AVISPA web tool HLPSL")
-- Paste the HLPSL content; select OFMC back-end; click Verify
-- Screenshot the result page
-
-**Expected output (unauthenticated):**
-```
-SUMMARY: UNSAFE
-DETAILS: ATTACK_FOUND
-PROTOCOL: dh_unauth
-...
-Attack trace: i → a (G, P); i(a) → b (G^x); i(b) → a (G^y) ...
-```
-
-**Expected output (authenticated):**
-```
-SUMMARY: SAFE
-DETAILS: NO_ATTACK_FOUND
-PROTOCOL: dh_auth
-```
-
-> ⚠️ **CRITICAL:** Do NOT include screenshots of SAFE/UNSAFE unless you actually ran
-> AVISPA. The tool output is the evidence. Fabricated results are academic dishonesty.
-
-#### Commit Message
+#### Commit
 
 ```
-git commit -m "phase-6: AVISPA HLPSL models for unauthenticated and signed DH; results screenshots"
+git commit -m "phase-5: AVISPA HLPSL models (unauth/auth); run and screenshot before submitting"
+```
+
+---
+
+### 🔲 PHASE 6: MFA — TOTP Login (Inside the AES-GCM Channel)
+
+**Goal:** After the DH handshake completes (and the AES-GCM session key is established),
+run a TOTP + password login **inside the encrypted channel**. This means the OTP code
+is never transmitted in plaintext — the AES-GCM channel protects it in transit.
+
+**Why inside the channel:** MFA credentials are sensitive. Sending them before
+encryption is set up would expose them to eavesdroppers. The DH handshake (possibly
+signed in `--secure` mode) establishes the session key first; then the login challenge
+rides inside that encrypted channel.
+
+**Branch:** `feat/mfa`
+
+#### Files to Create/Modify
+
+| File | Action |
+|---|---|
+| `mfa.py` | **CREATE**: enrollment, verification, lockout |
+| `enroll.py` | **CREATE**: one-shot enrollment CLI |
+| `run.py` | **MODIFY**: if `--mfa`, call `mfa_login_server/client` after `CryptoProtocol` is ready |
+| `requirements.txt` | Add `pyotp>=2.9.0`, `qrcode>=7.4`, `Pillow>=10.0` |
+
+#### MFA Protocol (inside AES-GCM channel)
+
+```
+Client → Server:  Enc_K("MFA_USERNAME:" + username)
+Server → Client:  Enc_K("MFA_CHALLENGE")
+Client → Server:  Enc_K("MFA_CREDS:" + password + ":" + totp_code)
+Server verifies; sends:
+  on success: Enc_K("MFA_OK")
+  on failure: Enc_K("MFA_FAIL:" + reason)
+If MFA_FAIL: both sides close connection.
+```
+
+All messages go through `conn.send(crypto_protocol.encrypt(...))` and
+`crypto_protocol.decrypt(conn.recv())` — the same channel used for chat.
+
+#### `mfa.py` — API
+
+```python
+def enroll_user(username: str, password: str, users_file: str = 'users.json') -> str:
+    """Create user record; return TOTP provisioning URI."""
+
+def save_qr(uri: str, path: str) -> None:
+    """Save QR PNG using qrcode + Pillow."""
+
+def hash_password(password: str, salt: bytes) -> bytes:
+    """PBKDF2-HMAC-SHA512, 200 000 iterations. Returns 64-byte digest."""
+
+def verify_login(username: str, password: str, totp_code: str,
+                 users_file: str = 'users.json') -> tuple[bool, str]:
+    """
+    Returns (True, '') or (False, reason).
+    Reasons: 'USER_NOT_FOUND', 'WRONG_PASSWORD', 'WRONG_OTP', 'LOCKED_OUT'.
+    Enforces 3-attempt lockout with 30-second cooldown.
+    Uses hmac.compare_digest for timing-safe password comparison.
+    """
+
+def mfa_server_side(conn, crypto_protocol) -> bool:
+    """
+    Read username/password/OTP from encrypted channel, verify, send MFA_OK or MFA_FAIL.
+    Returns True on success. Caller closes conn on False.
+    """
+
+def mfa_client_side(conn, crypto_protocol, username: str, password: str, totp_code: str) -> bool:
+    """
+    Send credentials over encrypted channel, receive result.
+    Returns True on MFA_OK, False on MFA_FAIL.
+    Caller closes conn on False.
+    """
+```
+
+#### `run.py` Integration
+
+```python
+# After CryptoProtocol is constructed (both server and client):
+if args.mfa:
+    from mfa import mfa_server_side, mfa_client_side
+    if is_server:
+        ok = mfa_server_side(conn, crypto_protocol)
+    else:
+        username = input("Username: ")
+        password = input("Password: ")
+        totp_code = input("OTP code: ")
+        ok = mfa_client_side(conn, crypto_protocol, username, password, totp_code)
+    if not ok:
+        print("[MFA] Login failed. Closing connection.")
+        conn._sock.close()
+        sys.exit(1)
+    print("[MFA] Login successful. Proceeding to chat.")
+```
+
+#### Automated Tests
+
+```python
+# tests/test_mfa.py
+# 1. test_enroll_creates_record()
+# 2. test_correct_login()
+# 3. test_wrong_password()
+# 4. test_wrong_otp()
+# 5. test_lockout_after_3_failures()
+# 6. test_lockout_expires_after_30s()  (mock time)
+# 7. test_hash_deterministic()
+# 8. test_timing_safe_compare()  (hmac.compare_digest used, not ==)
+# 9. test_mfa_over_channel_e2e()  (two threads, MFA handshake completes)
+```
+
+#### Commit
+
+```
+git commit -m "phase-6: TOTP+PBKDF2-SHA512 MFA inside AES-GCM channel; mfa.py; enroll.py"
 ```
 
 ---
 
 ### 🔲 PHASE 7: Docs, Polish, and Final Cleanup
 
-**Goal:** Professional README, DEMO.md, Mermaid diagrams, docs/ folder, original
-author credit retained, clean-environment test.
+**Goal:** Professional README, DEMO.md, Mermaid sequence diagrams, docs/ folder,
+original author credit, clean-environment test.
 
 **Branch:** `feat/docs`
 
@@ -968,73 +1067,32 @@ author credit retained, clean-environment test.
 
 | File | Action |
 |---|---|
-| `README.md` | **Rewrite**: project overview, credit to orignal authors, install, all modes |
-| `DEMO.md` | **CREATE**: 10-min demo runbook (see Part 5 below) |
-| `docs/diagram_normal_dh.md` | **CREATE**: Mermaid sequence diagram — normal DH chat |
-| `docs/diagram_mitm_attack.md` | **CREATE**: Mermaid sequence diagram — MITM attack |
-| `docs/diagram_signed_dh.md` | **CREATE**: Mermaid sequence diagram — authenticated DH |
-| `docs/avispa_unsafe.png` | AVISPA output screenshot (from Phase 6) |
-| `docs/avispa_safe.png` | AVISPA output screenshot (from Phase 6) |
-| `.gitignore` | Verify `venv/`, `*.pem`, `users.json`, `__pycache__/` are all present |
-
-#### Mermaid Diagrams (example — normal DH)
-
-```mermaid
-sequenceDiagram
-    participant Alice
-    participant Bob
-    Alice->>Bob: p, g, A = g^a mod p
-    Bob->>Alice: B = g^b mod p
-    Note over Alice,Bob: Both compute K = g^(ab) mod p
-    Note over Alice,Bob: AES key = HKDF(K)
-    Alice->>Bob: Enc_K("Hello Bob!")
-    Bob->>Alice: Enc_K("Hello Alice!")
-```
-
-#### README Structure
-
-```markdown
-# DH-MITM Secure Chat — IS FA2 Project
-
-> Original work by Jay Bosamiya and Rakholiya Jenish (MIT License, 2015).
-> This fork adds Python 3 port, AES-256-GCM, RSA-signed DH, TOTP-MFA, and AVISPA verification.
-> Fork maintained by [our team] for academic demonstration purposes only.
-
-## Quick Start
-...
-
-## Demo Modes
-| Command | What it shows |
-|---|---|
-| `python run.py 9000` | Vulnerable server (AES-CBC, no auth) |
-| `python run.py 127.0.0.1 9000` | Client connects |
-| `python mitm.py 127.0.0.1 9000 9001` | MITM intercepts everything |
-| `python run.py 9000 --secure` | Server with signed DH |
-| `python run.py 9000 --mfa --secure` | MFA + signed DH |
-
-## Security Note
-For local lab use only. Do not run on public networks.
-```
+| `README.md` | Rewrite with credit, all modes, install |
+| `DEMO.md` | 10-min demo runbook (Part 5 of this document) |
+| `docs/diagram_normal_dh.md` | Mermaid — normal DH chat |
+| `docs/diagram_mitm_attack.md` | Mermaid — parameter injection |
+| `docs/diagram_signed_dh.md` | Mermaid — signed DH, MITM fails |
+| `docs/avispa_unsafe.png` | From actual AVISPA run |
+| `docs/avispa_safe.png` | From actual AVISPA run |
+| `.gitignore` | Verify `venv/`, `*.pem`, `users.json`, `__pycache__/` all present |
 
 #### Clean-Environment Test
 
 ```powershell
-# On a fresh machine (or after deleting venv/):
 python -m venv venv_test
 venv_test\Scripts\pip install -r requirements.txt
-venv_test\Scripts\python diffie_hellman.py   # self-test
-venv_test\Scripts\python crypto_protocol.py  # self-test
-venv_test\Scripts\python headless_test.py    # integration
+venv_test\Scripts\python diffie_hellman.py
+venv_test\Scripts\python crypto_protocol.py
+venv_test\Scripts\python headless_test.py
 venv_test\Scripts\python headless_mitm_test.py
 venv_test\Scripts\python -m pytest tests/ -v
 ```
+All must pass. Remove `venv_test/` after.
 
-All must pass before the demo day.
-
-#### Commit Message
+#### Commit
 
 ```
-git commit -m "phase-7: docs, Mermaid diagrams, polished README, DEMO.md, clean-env test pass"
+git commit -m "phase-7: README, DEMO.md, Mermaid diagrams, docs/, clean-env test passes"
 ```
 
 ---
@@ -1044,232 +1102,164 @@ git commit -m "phase-7: docs, Mermaid diagrams, polished README, DEMO.md, clean-
 ```
 DiffieHellman_V2/
 │
-├── run.py                    Main entry: server (1 arg) or client (2 args); --secure, --mfa, --no-gui
-├── mitm.py                   MITM proxy: logs plaintext; fails gracefully in --secure mode
-├── network.py                TCP socket wrapper: base64-framed newline-delimited messages
-├── diffie_hellman.py         DH: RFC 3526 2048-bit or toy; generate_public_broadcast, get_shared_secret
-├── crypto_protocol.py        AES-256-GCM with HKDF; secure_handshake_server/client functions
-├── gui.py                    Tkinter chat GUI (skippable via --no-gui)
-├── auth_dh.py                RSA-PSS/SHA-512 sign/verify/load/save (Phase 3)
-├── gen_keys.py               One-shot key generation script (run before demo)
-├── enroll.py                 MFA enrollment: create users.json entry + QR PNG (Phase 5)
-├── mfa.py                    TOTP+PBKDF2 login, lockout logic (Phase 5)
+├── run.py                    Server (1 arg) or client (2 args); --secure; --no-gui; --mfa
+├── mitm.py                   MITM proxy; --secure speaks signed wire format + attempts forgery
+├── network.py                Stdlib TCP; base64-framed newline-delimited messages
+├── diffie_hellman.py         RFC 3526 2048-bit DH; validate_public_value; secrets.randbelow
+├── crypto_protocol.py        AES-256-GCM + HKDF; secure_handshake_server/client
+├── gui.py                    Tkinter chat GUI (skipped via --no-gui)
+├── auth_dh.py                RSA-PSS/SHA-512 sign/verify; HandshakeError (Phase 3)
+├── gen_keys.py               RSA-2048 keygen; refuses to overwrite (Phase 3)
+├── enroll.py                 TOTP enrollment → users.json + QR PNG (Phase 6)
+├── mfa.py                    PBKDF2+TOTP login; lockout; mfa_server/client_side (Phase 6)
 │
-├── headless_test.py          Integration test: normal DH + AES round-trip (no GUI)
-├── headless_mitm_test.py     Integration test: MITM attack on vulnerable mode (no GUI)
+├── headless_test.py          Integration: DH + AES round-trip, no GUI
+├── headless_mitm_test.py     Integration: MITM parameter injection, no GUI
 │
 ├── tests/
-│   ├── test_args.py          argparse correctness (Phase 1)
-│   ├── test_crypto_v2.py     AES-GCM + HKDF unit tests (Phase 2)
-│   ├── test_auth_dh.py       RSA sign/verify unit tests (Phase 3)
-│   ├── test_secure_vs_mitm.py  All 4 scenarios end-to-end (Phase 4)
-│   └── test_mfa.py           TOTP + lockout unit tests (Phase 5)
+│   ├── __init__.py
+│   ├── test_args.py          argparse correctness (Phase 1) ✅
+│   ├── test_crypto_v2.py     AES-GCM + HKDF + RFC 3526 (Phase 2)
+│   ├── test_auth_dh.py       RSA sign/verify + HandshakeError (Phase 3)
+│   ├── test_secure_vs_mitm.py  All 8 scenarios (Phase 4)
+│   └── test_mfa.py           TOTP + lockout (Phase 6)
 │
 ├── avispa/
-│   ├── dh_unauth.hlpsl       HLPSL: unauthenticated DH (expected: UNSAFE)
-│   ├── dh_auth.hlpsl         HLPSL: signature-authenticated DH (expected: SAFE)
-│   └── README_avispa.md      How to install AVISPA and run both models
+│   ├── dh_unauth.hlpsl       HLPSL: unauthenticated DH (expected UNSAFE)
+│   ├── dh_auth.hlpsl         HLPSL: signed DH (expected SAFE)
+│   └── README_avispa.md      Install, run, interpret
 │
 ├── docs/
-│   ├── diagram_normal_dh.md  Mermaid sequence: Alice↔Bob, no attack
-│   ├── diagram_mitm_attack.md Mermaid sequence: Alice↔Mallory↔Bob
-│   ├── diagram_signed_dh.md  Mermaid sequence: signed handshake, MITM fails
-│   ├── avispa_unsafe.png     OFMC screenshot for unauthenticated DH
-│   └── avispa_safe.png       OFMC screenshot for authenticated DH
+│   ├── diagram_normal_dh.md
+│   ├── diagram_mitm_attack.md
+│   ├── diagram_signed_dh.md
+│   ├── avispa_unsafe.png     (from actual AVISPA run)
+│   └── avispa_safe.png       (from actual AVISPA run)
 │
-├── report/                   Original authors' report (kept unchanged)
-│   ├── report.pdf
-│   ├── report.tex
-│   └── bib.bib
-│
-├── alice_pub.pem             Alice's RSA public key (committed; OK to share)
-├── bob_pub.pem               Bob's RSA public key (committed; OK to share)
-│
+├── report/                   Original authors' report — kept unchanged
 ├── requirements.txt          pycryptodome, cryptography, pyotp, qrcode, Pillow
-├── README.md                 Rewritten: install, all modes, credit to original authors
-├── DEMO.md                   10-minute demo runbook with exact commands
-├── IS_FA2_Project_Context.md Project spec (read-only reference)
-│
-├── .gitignore                Adds: *.pem (private), users.json, venv/, __pycache__/
-└── venv/                     Local Python 3 venv (not committed)
+├── README.md
+├── DEMO.md
+├── IS_FA2_Project_Context.md
+├── IMPLEMENTATION_PLAN.md
+└── .gitignore                *.pem; users.json; venv/; __pycache__/
 ```
 
 ---
 
 ## PART 5 — DEMO RUNBOOK
 
-### Pre-demo setup (do this the day before)
+### Pre-Demo Setup (day before)
 
 ```powershell
 cd c:\Users\ASUS\Desktop\Harsh\PROJECTS\IS_FA2\DiffieHellman_V2
 venv\Scripts\activate
-
-# Generate RSA key pairs (once)
-python gen_keys.py
-# → alice_priv.pem, alice_pub.pem, bob_priv.pem, bob_pub.pem
-
-# MFA enrollment (once)
-python enroll.py alice
-# → users.json updated; alice_mfa_qr.png created
-# Scan alice_mfa_qr.png with Google Authenticator
-
-# Verify everything works
-python -m pytest tests/ -v       # all green
-python headless_test.py          # [PASS]
-python headless_mitm_test.py     # [PASS] MITM attack succeeded
+python gen_keys.py        # creates *.pem; refuses overwrite if already exist
+python enroll.py alice    # creates users.json entry; saves alice_mfa_qr.png
+                          # scan alice_mfa_qr.png with Google Authenticator
+python -m pytest tests/ -v
+python headless_test.py
+python headless_mitm_test.py
 ```
 
 ---
 
-### Scenario 1 — Normal Secure Chat (no MITM)
-
-**Talk track (1 minute):** "This is a standard Diffie-Hellman encrypted chat. An
-eavesdropper watching the network sees only ciphertext. But notice: neither side
-verified WHO they are talking to."
+### Scenario 1 — Normal Encrypted Chat
 
 ```powershell
-# Terminal 1 — Bob (server)
-venv\Scripts\activate
-python run.py 9000
-
-# Terminal 2 — Alice (client)  [after server window appears]
-venv\Scripts\activate
-python run.py 127.0.0.1 9000
+# Terminal 1 (Bob/server):  venv\Scripts\activate && python run.py 9000
+# Terminal 2 (Alice/client): venv\Scripts\activate && python run.py 127.0.0.1 9000
 ```
-
-**Expected:**
-- Both Tkinter windows open.
-- Mode banner: `[*] Starting as Server in VULNERABLE mode.`
-- Type a message in Alice's window; it appears in Bob's (encrypted on the wire).
+**Expected:** Tkinter windows open. Mode banner: `VULNERABLE`. Messages appear encrypted
+on Wireshark (`tcp.port == 9000`), plaintext in both GUI windows.
 
 ---
 
-### Scenario 2 — MITM Attack on Vulnerable Mode
-
-**Talk track (2 minutes):** "Mallory positions herself between Alice and Bob BEFORE
-the key exchange. She intercepts the DH parameters, substitutes her own public values,
-and establishes two separate shared secrets. She can now read every message."
+### Scenario 2 — MITM Attack (Vulnerable Mode)
 
 ```powershell
-# Terminal 1 — Bob (server)
-python run.py 9000
-
-# Terminal 2 — Mallory (MITM proxy)  [after server starts]
-python mitm.py 127.0.0.1 9000 9001
-
-# Terminal 3 — Alice (client)  [after MITM proxy is ready]
-python run.py 127.0.0.1 9001     ← NOTE: Alice connects to port 9001, not 9000
+# Terminal 1: python run.py 9000
+# Terminal 2: python mitm.py 127.0.0.1 9000 9001    ← after server starts
+# Terminal 3: python run.py 127.0.0.1 9001          ← connects to MITM, not server
 ```
-
-**Expected:**
-- Three Tkinter windows open.
-- Alice types "Attack at dawn" → appears in Bob's window (normal-looking).
-- **Mallory's window shows: `[client] Attack at dawn`** — plaintext, intercepted.
+**Expected:** Three windows. Alice types → Bob sees it. Mallory's terminal shows
+`[MITM][client] INTERCEPTED: <plaintext>`.
 
 ---
 
-### Scenario 3 — MITM Attack vs `--secure` Mode (Attack Fails)
-
-**Talk track (2 minutes):** "Now we enable the signature fix. Alice and Bob each sign
-their DH public value. When Mallory substitutes her value, Bob's signature is not on it.
-Alice verifies and detects the forgery immediately."
+### Scenario 3 — MITM Attack Fails (`--secure`)
 
 ```powershell
-# Terminal 1 — Bob (server, secure mode)
-python run.py 9000 --secure
-
-# Terminal 2 — Mallory (MITM, same attack code)
-python mitm.py 127.0.0.1 9000 9001 --secure
-
-# Terminal 3 — Alice (client, secure mode)
-python run.py 127.0.0.1 9001 --secure
+# Terminal 1: python run.py 9000 --secure
+# Terminal 2: python mitm.py 127.0.0.1 9000 9001 --secure
+# Terminal 3: python run.py 127.0.0.1 9001 --secure
 ```
-
 **Expected:**
 ```
-Alice's terminal:
-  [SECURE] Signature verification FAILED.
-  [SECURE] The DH public value you received was NOT signed by the expected key.
-  [SECURE] Possible man-in-the-middle attack. Aborting connection.
-
-Bob's terminal:
-  [SECURE] Signature verification FAILED.
-  ...
-
-Mallory's terminal:
-  [MITM] Secure mode detected. Attempting attack anyway...
-  [MITM] Connection closed by endpoint (signature check failed).
+Alice:   [SECURE] Signature verification FAILED: ...
+         [SECURE] Possible man-in-the-middle attack. Aborting connection.
+Bob:     [SECURE] Signature verification FAILED: ...
+Mallory: [MITM] Sent forged A + garbage signature to client.
+         [MITM] Endpoints should now abort with HandshakeError.
 ```
 
 ---
 
-### Scenario 4 — MFA Login Demo
-
-**Talk track (1 minute):** "Before the DH handshake, Alice must prove she knows both
-her password AND has her phone. A stolen password alone is not enough."
+### Scenario 4 — MFA Login
 
 ```powershell
-# Terminal 1 — Bob (server with MFA)
-python run.py 9000 --mfa --secure
-
-# Terminal 2 — Alice
-python run.py 127.0.0.1 9000 --mfa --secure
-# Prompts: Username: alice
-#          Password: ****
-#          OTP code: [read from Authenticator app]
+# Terminal 1: python run.py 9000 --mfa --secure
+# Terminal 2: python run.py 127.0.0.1 9000 --mfa --secure
+# Prompts: Username: alice  Password: ****  OTP code: <from Authenticator>
 ```
-
-**Expected (correct code):** `[MFA] Login successful. Proceeding with key exchange.`
-**Expected (wrong code):** `[MFA] Wrong OTP code. 2 attempts remaining.`
+**Expected (correct code):** `[MFA] Login successful. Proceeding to chat.`  
+**Expected (wrong code):** `[MFA] Wrong OTP code. 2 attempts remaining.`  
 **Expected (3 failures):** `[MFA] Account locked for 30 seconds.`
 
 ---
 
 ### 10-Minute Talk Track
 
-| Min | Slide/Action | Say |
+| Min | Step | Say |
 |---|---|---|
-| 0:00 | Title slide | "We demonstrate why key exchange without authentication is insecure, break it live, then fix it." |
-| 1:00 | DH math slide | "Alice picks secret a, sends A=g^a mod p. Bob picks b, sends B. Both compute g^ab — an eavesdropper cannot solve the discrete log." |
-| 2:00 | Scenario 1 (2 terminals) | "Wireshark shows only ciphertext on the wire. Looks secure." |
-| 4:00 | MITM explanation slide | "But DH has no authentication. Mallory intercepts before the key exchange." |
-| 5:00 | Scenario 2 (3 terminals) | "Alice types the secret. Bob sees it. But so does Mallory — in plaintext." |
-| 7:00 | Fix explanation slide | "RSA-PSS/SHA-512 signature on the DH value. Mallory cannot forge it." |
-| 7:30 | Scenario 3 (3 terminals) | "Same attack code, same three terminals. This time — connection aborted." |
-| 8:30 | MFA slide | "Even if the key infrastructure is perfect, a stolen password is a problem." |
-| 9:00 | Scenario 4 | "Password + authenticator app. Phone required." |
-| 9:30 | AVISPA screenshot | "Formal verification agrees. Tool says UNSAFE (without signatures) and SAFE (with)." |
-| 10:00 | Syllabus slide | "Units I (MITM), III (DH, AES, RSA), IV (signatures, SHA-512, MFA, AVISPA)." |
+| 0:00 | Title slide | "We break DH, then fix it with signatures, MFA, and formal verification." |
+| 1:00 | DH math | "Alice and Bob agree on a shared secret without sending it — eavesdropper must solve discrete log." |
+| 2:30 | Scenario 1 | "Wireshark shows only ciphertext. Looks secure." |
+| 4:00 | MITM slide | "DH has no authentication. Mallory intercepts before the key exchange." |
+| 5:00 | Scenario 2 | "Same two parties, Mallory in the middle. She reads every message in plaintext." |
+| 6:30 | Fix slide | "RSA-PSS/SHA-512 signature on the DH value. Labels prevent cross-role replay. Mallory cannot forge." |
+| 7:00 | Scenario 3 | "Same attack code — connection aborted by both endpoints." |
+| 8:00 | Scenario 4 | "MFA inside the encrypted channel. Stolen password alone is not enough." |
+| 9:00 | AVISPA | "Formal verification: tool says UNSAFE without signatures, SAFE with." |
+| 9:45 | Syllabus slide | "Units I (MITM), III (DH, AES, RSA), IV (signatures, SHA-512, MFA, AVISPA)." |
 
 ---
 
 ## PART 6 — SECURITY ANALYSIS
 
-### What `--secure` Mode Protects Against
+### What `--secure` Protects
 
-| Threat | Protected? | Explanation |
+| Threat | Protected? | Why |
 |---|---|---|
-| Passive eavesdropper | ✅ Yes (even in vulnerable mode) | AES-GCM encryption; eavesdropper cannot compute DH secret |
-| Active MITM substituting DH values | ✅ Yes (in `--secure`) | Mallory cannot forge RSA-PSS/SHA-512 signature without Alice's/Bob's private key |
-| Bit-flip / ciphertext tampering | ✅ Yes (Phase 2+) | AES-GCM authentication tag detects any modification |
-| TOTP-only login with stolen password | ✅ Yes (Phase 5) | TOTP code required; changes every 30 seconds |
+| Passive eavesdropper | ✅ Both modes | AES-256-GCM; eavesdropper cannot compute DH secret |
+| Active MITM substituting DH values | ✅ `--secure` | Cannot forge RSA-PSS/SHA-512 signature |
+| Small-subgroup attack on DH | ✅ Phase 2+ | `validate_public_value` rejects out-of-range values |
+| Parameter injection (bad p/g) | ✅ Phase 2+ | Client rejects non-RFC-3526 parameters |
+| Ciphertext tampering | ✅ Phase 2+ | AES-GCM authentication tag |
+| Password-only login | ✅ Phase 6 | TOTP required |
+| Cross-role signature replay | ✅ Phase 3+ | Domain labels: "server-hello" vs "client-hello" |
+| Session-binding replay | ✅ Phase 3+ | Client's sig covers B+A; old sig won't match new A |
 
-### What `--secure` Mode Does NOT Protect Against
+### What `--secure` Does NOT Protect
 
-| Threat | Not Protected | Explanation | Optional Fix |
-|---|---|---|---|
-| Replay attack | ❌ | If Mallory records a session, she can replay old packets (same A value) | Add a per-session nonce in the signed data: sign `A || nonce_alice` |
-| Identity misbinding | ❌ Partial | Alice proves she signed A, but we don't bind "Alice" identity to A in the signature (no name/cert) | Sign `A || "alice"` (include identity string) |
-| Long-term key compromise | ❌ | If Alice's private key is stolen, all past and future sessions are broken | Use ephemeral keys + certificate-based identity |
-| No forward secrecy | ❌ | Static RSA keys mean past session recordings can be decrypted if a private key is later exposed | Use ephemeral Diffie-Hellman signing keys (EDH/SIGMA-style) |
-| No PKI / no certificate authority | ❌ | Public keys are pre-shared manually; no trust hierarchy | Use X.509 certificates (that's essentially TLS) |
-| Trust-on-first-use | ❌ | If an attacker intercepts the `*_pub.pem` file distribution, they can substitute their own key | Requires out-of-band key verification (fingerprint comparison) |
-
-### Smallest Improvements Worth Doing (Optional, for viva preparation)
-
-1. **Include identity in signed data:** Change `sign(priv, A_bytes)` to `sign(priv, A_bytes + b"alice")`. One-line fix. Prevents identity misbinding.
-2. **Include a nonce:** Client generates `nonce_A = os.urandom(16)`, signs `A_bytes + nonce_A`. Server echoes the nonce signed with B. Prevents replay. Small addition.
-3. **Use `secrets.randbelow(p)` for private exponent:** Already planned in Phase 2.
+| Threat | Not Protected | Smallest Fix |
+|---|---|---|
+| Long-term key compromise | ❌ | Ephemeral signing keys (SIGMA-style) |
+| No forward secrecy | ❌ | Fresh ephemeral DH even for signing layer |
+| No PKI | ❌ | X.509 certificates + CA — that's TLS |
+| Trust-on-first-use | ❌ | Out-of-band fingerprint verification |
+| Identity not bound in server sig | partial | Already fixed: domain label "server-hello" identifies role |
+| MFA credentials in plaintext (pre-Phase 6 design) | ✅ Fixed in Phase 6 | MFA runs inside AES-GCM channel |
 
 ---
 
@@ -1277,14 +1267,14 @@ python run.py 127.0.0.1 9000 --mfa --secure
 
 | # | Risk | Likelihood | Impact | Mitigation | Fallback |
 |---|---|---|---|---|---|
-| R1 | AVISPA install fails on Windows | High | Medium | Use WSL or AVISPA web tool | Show pre-run screenshots; describe tool in slides |
-| R2 | Tkinter not working on the demo machine | Low | High | Test GUI on demo machine a day early; have `--no-gui` ready | Use `--no-gui` + terminal output for demo |
-| R3 | DH key generation is too slow during demo (RSA.generate takes time) | Medium | Medium | Pre-generate keys in Phase 3; use saved keys during demo | `gen_keys.py` run in advance |
-| R4 | Private key accidentally committed to git | Medium | High | `.gitignore` has `*_priv.pem`; verify with `git status` before every push | Remove from history with `git filter-repo` immediately |
-| R5 | headless tests pass but GUI demo crashes | Medium | High | Rehearse full GUI demo 3× before submission day | Pre-recorded screen capture (per PROJECT_CONTEXT.md §12) |
-| R6 | Team member not available on demo day | Low | High | All 4 members can run all 3 scenarios; document runbook precisely | Any single member can do the demo solo |
-| R7 | `cryptography` library install fails (corporate network) | Low | Medium | Pre-download wheel files; use offline pip | Bundle wheels in `deps/` folder |
-| R8 | HLPSL syntax errors in AVISPA models | Medium | Medium | Start AVISPA early (Day 6–7); use AVISPA example protocols as templates | Use manual attack trace diagram as supplement |
+| R1 | AVISPA install fails on Windows | High | Medium | Use WSL or AVISPA web tool | Show pre-run screenshots from teammate's Linux |
+| R2 | Tkinter not working on demo machine | Low | High | Test GUI day before; have `--no-gui` ready | Use `--no-gui` + terminal printout |
+| R3 | Demo is slow during key operations | Low | Low | RFC 3526 group constants eliminate RSA.generate; DH public value computation takes < 0.1 s on modern hardware | Pre-warm by running `python diffie_hellman.py` once |
+| R4 | Private key accidentally committed | Medium | High | `*.pem` in `.gitignore`; check with `git status` before every push | `git filter-repo --path-glob '*.pem' --invert-paths` |
+| R5 | GUI demo crashes during presentation | Medium | High | Rehearse 3×; record backup video | Play pre-recorded video |
+| R6 | Team member unavailable on demo day | Low | High | All 4 members can run all scenarios | Any one member can do solo demo |
+| R7 | `cryptography` pip install fails on lab network | Low | Medium | Download wheel files at home; use `pip install --find-links ./deps/` | Bundle wheels in `deps/` folder |
+| R8 | HLPSL syntax errors prevent AVISPA run | Medium | Medium | Start AVISPA early (Day 6); use AVISPA examples as templates | Show manual attack trace diagram; cite tool |
 
 ---
 
@@ -1292,219 +1282,213 @@ python run.py 127.0.0.1 9000 --mfa --secure
 
 | Day | Goal | Lead/Integrator | Crypto Engineer | Auth+Tools | Verification+Docs |
 |---|---|---|---|---|---|
-| 1 | Phase 0 already done. Git setup, branch from `feat/py3-port`. Manual GUI test. | Merge Phase 0 PR, set up branches | Verify headless tests | Confirm demo machine works | Read original report/ |
-| 2 | Phase 1: argparse, banner, `--no-gui` | Review, merge PR | Implement `parse_args()` in run.py + mitm.py | Write `tests/test_args.py` | Start README draft |
-| 3 | Phase 2: AES-GCM + HKDF + RFC 3526 | Review, merge | Implement `crypto_protocol.py` rewrite | Write `tests/test_crypto_v2.py` | Diagram: normal DH |
-| 4 | Phase 3: auth_dh.py, gen_keys.py, handshake | Review, merge | Implement `auth_dh.py`, `secure_handshake_*` | Write `tests/test_auth_dh.py` | Diagram: signed DH |
-| 5 | Phase 4: MITM fails, end-to-end secure test | Review, merge | Patch `run.py` server+client branches | Write `tests/test_secure_vs_mitm.py` | Diagram: MITM attack |
-| 6 | Phase 5: MFA (mfa.py, enroll.py) | Review, merge | — | Implement `mfa.py`, `enroll.py`, `tests/test_mfa.py` | AVISPA: start HLPSL models |
-| 7 | Phase 6: AVISPA, run both models | Review, integrate screenshots | — | — | Run AVISPA, screenshot, write `avispa/README_avispa.md` |
-| 8 | Phase 7: README, DEMO.md, docs/ | Merge all PRs; write README | Code review all modules | — | Write DEMO.md; finalize diagrams |
-| 9 | Full rehearsal × 3; fix issues | Run demo as MC | Fix any bugs found | Fix MFA timing issues | Finalize slides and AVISPA section |
+| 1 | Phase 0 done ✅. Git setup. Manual GUI test. | Merge tag; set up branches | Verify headless tests on second machine | Check Tkinter on demo PC | Read original `report/` |
+| 2 | Phase 1 ✅ argparse, banner, stdin thread | Review + merge | Implement `run.py`/`mitm.py` changes | Write `tests/test_args.py` | README first draft |
+| 3 | Phase 2: AES-GCM, HKDF, RFC 3526 | Review, merge | Rewrite `crypto_protocol.py`, `diffie_hellman.py` | Write `tests/test_crypto_v2.py` | Diagram: normal DH |
+| 4 | Phase 3: auth_dh.py, signatures | Review, merge | Implement `auth_dh.py`, `secure_handshake_*` | Write `tests/test_auth_dh.py` | Diagram: signed DH |
+| 5 | Phase 4: MITM forgery + all 8 tests | Review, merge | Patch `mitm.py` secure handshake | Write `tests/test_secure_vs_mitm.py` | Diagram: MITM attack |
+| 6 | Phase 5: AVISPA HLPSL models | — | — | — | Write HLPSL; run on web tool; screenshot |
+| 7 | Phase 6: MFA inside channel | Review, merge | — | `mfa.py`, `enroll.py`, `tests/test_mfa.py` | AVISPA debug and re-run |
+| 8 | Phase 7: Docs, README, DEMO.md | Merge all PRs; write README | Code review | — | DEMO.md; finalize diagrams |
+| 9 | Full rehearsal × 3 | Run demo as MC | Fix bugs | Fix MFA timing | Finalize slides + AVISPA section |
 | 10 | Buffer / submission | Submit repo, report, slides | — | — | Proofread report |
 
 ---
 
 ## PART 9 — TESTING STRATEGY
 
-### Unit Tests (per phase)
+### Unit Tests
 
-| Phase | Test file | What is tested |
+| Phase | File | Covers |
 |---|---|---|
-| 0 | `diffie_hellman.py --main` | DH self-test (shared secret matches) |
+| 0 | `diffie_hellman.py --main` | DH shared secret matches |
 | 0 | `crypto_protocol.py --main` | CBC round-trip |
-| 1 | `tests/test_args.py` | argparse: all flag combinations |
-| 2 | `tests/test_crypto_v2.py` | GCM round-trip, tamper detection, nonce uniqueness |
-| 3 | `tests/test_auth_dh.py` | Sign/verify, wrong key, tampered data |
-| 4 | `tests/test_secure_vs_mitm.py` | All 4 end-to-end scenarios |
-| 5 | `tests/test_mfa.py` | Enroll, correct/wrong login, lockout |
+| 1 | `tests/test_args.py` | argparse all combinations; banner text |
+| 2 | `tests/test_crypto_v2.py` | GCM; tamper; nonce; RFC 3526 rejection |
+| 3 | `tests/test_auth_dh.py` | Sign/verify; HandshakeError; domain labels; gen_keys no-overwrite |
+| 4 | `tests/test_secure_vs_mitm.py` | All 8 scenarios; replayed sig; wrong key |
+| 6 | `tests/test_mfa.py` | Enroll; login; lockout; timing-safe |
 
 ### Integration Tests
 
-| Script | What it proves |
+| Script | Proves |
 |---|---|
-| `headless_test.py` | Full DH + AES handshake + 3-message echo without GUI |
-| `headless_mitm_test.py` | MITM parameter injection + plaintext relay works |
+| `headless_test.py` | Full DH + AES handshake + 3-message echo |
+| `headless_mitm_test.py` | MITM parameter injection + plaintext relay |
 
-### Manual Checklist (run 24 hours before demo)
+### Manual Pre-Demo Checklist
 
-- [ ] `python gen_keys.py` runs without error; 4 PEM files created
-- [ ] `python enroll.py alice` creates `users.json` and `alice_mfa_qr.png`
-- [ ] QR code scans correctly in Google Authenticator
-- [ ] Scenario 1 (normal chat): both GUI windows open; messages appear
-- [ ] Scenario 2 (MITM): Mallory's window shows plaintext; Alice and Bob unaware
-- [ ] Scenario 3 (secure MITM fails): both endpoints print abort message
-- [ ] Scenario 4 (MFA): correct OTP → proceeds; wrong OTP → rejected
-- [ ] `python -m pytest tests/ -v` → all tests green
-- [ ] `git status` shows NO `*_priv.pem` files tracked
+- [ ] `python gen_keys.py` — 4 PEM files created; re-running refuses overwrite
+- [ ] `python enroll.py alice` — `users.json` + `alice_mfa_qr.png` created
+- [ ] QR scans in Google Authenticator
+- [ ] Scenario 1: both GUI windows open; messages flow
+- [ ] Scenario 2: Mallory's `[MITM][client] INTERCEPTED:` lines appear
+- [ ] Scenario 3: both endpoints print `Signature verification FAILED`
+- [ ] Scenario 4: correct OTP → OK; wrong OTP → rejected; 3rd → locked
+- [ ] `python -m pytest tests/ -v` — all green
+- [ ] `git log --all --full-history -- "*.pem"` — **no output** (no PEM in history)
 
-### Pre-Demo Checklist (30 minutes before presentation)
+### Pre-Demo Checklist (30 minutes before)
 
-- [ ] Machine plugged in, display connected, no screen saver
-- [ ] 4 terminal windows pre-positioned on screen
-- [ ] `venv\Scripts\activate` run in each terminal
-- [ ] `alice_mfa_qr.png` already enrolled on the presenter's phone
-- [ ] Wireshark open, filter `tcp.port == 9000`, ready to capture
-- [ ] Slides open at title slide
-- [ ] Pre-recorded backup video loaded and ready
+- [ ] Machine charged, display connected
+- [ ] 4 terminal windows pre-positioned; venv activated in each
+- [ ] Authenticator app open on phone
+- [ ] Wireshark open; filter `tcp.port == 9000`
+- [ ] Slides at title slide
+- [ ] Backup video ready
 
 ---
 
 ## PART 10 — VIVA PREPARATION
 
-> These questions are tied to **our specific code**. Every team member must be able
-> to answer all 15.
+**Q1. In `diffie_hellman.py`, what prime `p` did the original code use, and what do we use now?**
+A: Original: `RSA.generate(2048).p` — a ~1024-bit prime factor of a 2048-bit RSA key. Ours: the
+RFC 3526 2048-bit MODP group 14, a pre-defined safe prime `p` where `(p-1)/2` is also prime.
 
-**Q1. In `diffie_hellman.py`, what does `generate_prime()` return and what is its size?**
-A: It returns `RSAKey.p`, one prime factor of a 2048-bit RSA key — so approximately
-1024 bits. We upgrade to the RFC 3526 2048-bit MODP group in Phase 2 for the `--secure` mode.
+**Q2. Why is `g = randint(p//2, p-1)` insecure as a generator?**
+A: A generator must be a primitive root of `Z_p*` to guarantee the full-order subgroup is used.
+A random element may only generate a small subgroup, making discrete-log much easier.
+RFC 3526 specifies `g = 2`, which generates a prime-order subgroup of size `(p-1)/2`.
 
-**Q2. Why did we set `g = randint(p//2, p-1)` in the original code, and is that secure?**
-A: The original code chose a random large integer as g. This is NOT secure: g should be
-a primitive root modulo p (or at least generate the full multiplicative group). We replace
-this with the standard generator g=2 from RFC 3526 in Phase 2.
+**Q3. What is the "parameter injection" attack and where does it happen in `mitm.py`?**
+A: Lines 58–74: Mallory creates her own `DiffieHellman` instances, computes her own B toward
+Bob and her own A toward Alice, and sends those instead of the real values. Both sides
+compute shared secrets with Mallory, not with each other.
 
-**Q3. In `mitm.py`, what exactly does Mallory send to Alice instead of Bob's real A?**
-A: Mallory creates her own `DiffieHellman(p, g)` instance, computes `A_client = g^(mallory_c) mod p`,
-and sends that to Alice. Alice believes this is Bob's public value. (Lines 65–70 of mitm.py.)
+**Q4. Why do we validate the received DH public value with `validate_public_value`?**
+A: Values outside `(1, p-1)` can enable small-subgroup attacks where the attacker learns
+the private exponent bit-by-bit. We reject any value ≤1 or ≥p-1.
 
-**Q4. Why does Alice compute the wrong shared secret with Bob after the attack?**
-A: Alice computes `K = A_client^(alice_private) mod p = g^(mallory_c · alice_private) mod p`.
-Mallory also knows `mallory_c`, so she computes the same value. Alice shares a key with
-Mallory, not Bob.
+**Q5. What does AES-GCM add over AES-CBC?**
+A: GCM provides authenticated encryption: any tampering with the ciphertext causes
+`decrypt()` to raise `InvalidTag`. CBC provides confidentiality only; an attacker can
+flip bits in ciphertext to cause predictable plaintext changes (bit-flip attack).
 
-**Q5. In `crypto_protocol.py`, why is the IV (initialization vector) the same for every message?**
-A: The IV is derived once from the shared secret (last 16 bytes of SHA-256) and reused.
-In CBC, a fixed IV means two messages with the same prefix produce identical ciphertext
-prefixes, leaking information. AES-GCM (Phase 2) uses a fresh random 12-byte nonce per
-message, which eliminates this problem.
+**Q6. Why is the IV fixed in our Phase 0 code, and why is that bad?**
+A: The IV is derived once from the shared secret and reused for every message. In CBC,
+two messages with the same prefix produce the same ciphertext prefix, leaking that the
+prefixes match. GCM (Phase 2) uses a fresh random 12-byte nonce per message.
 
-**Q6. What is a padding oracle attack, and is our Phase 0 code vulnerable?**
-A: A padding oracle attack lets an attacker distinguish "wrong padding" from "correct
-padding" to decrypt ciphertext byte-by-byte. Our `pkcs_7_unpad()` raises a specific
-`PaddingException` — if this exception were exposed over the network, it would be a
-padding oracle. In Phase 2, AES-GCM eliminates both padding and this attack class.
+**Q7. What does domain separation (`b"server-hello"` / `b"client-hello"`) prevent?**
+A: Without labels, a valid server signature `sign(A)` could be replayed as if it were
+a client signature. The label makes the signed data distinct per role, so a server's
+signature is cryptographically incompatible with a client's expected signature format.
 
-**Q7. In `auth_dh.py`, what does RSA-PSS stand for, and why PSS instead of PKCS#1 v1.5?**
-A: PSS = Probabilistic Signature Scheme. PSS is provably secure (its security reduces to
-RSA hardness). PKCS#1 v1.5 has known vulnerabilities (Bleichenbacher attack). PSS is the
-modern standard (NIST, IETF).
+**Q8. Why does the client's signature cover `B + A`, not just `B`?**
+A: It binds Bob's reply to this specific session's A value. If Mallory records a valid
+`(B, sig_B)` from a past session and replays it in a new session (with different A),
+the signature will not verify because A changed.
 
-**Q8. Why does Bob sign `(B_bytes || A_bytes)` rather than just `B_bytes`?**
-A: Binding the reply to Alice's specific A value prevents the attack where Mallory records
-a valid `(B, sig_B)` from Bob and replays it to a different Alice in a future session.
-The signature only verifies for this specific A value.
+**Q9. Why does `verify()` raise `HandshakeError` instead of returning `False`?**
+A: Library code should not make control-flow decisions for the caller. Raising an
+exception ensures the caller (run.py) cannot accidentally ignore the failure by
+forgetting to check the return value. The caller catches it, prints the abort message,
+and closes the socket — no `sys.exit()` inside library code.
 
-**Q9. In `network.py`, why did we replace pwntools with stdlib socket?**
-A: pwntools is unreliable on Windows (designed primarily for Linux CTF exploitation). The
-stdlib `socket` module is available everywhere, has no extra dependencies, and our use
-case (simple TCP server/client) needs none of pwntools' advanced features.
+**Q10. Why does MFA run inside the AES-GCM channel (Phase 6), not before it?**
+A: If MFA credentials were sent before the session key is established, they would
+travel in plaintext or under at best a weak transport. The DH handshake first
+establishes the authenticated session key; the TOTP code then travels encrypted
+inside that channel, invisible to an eavesdropper.
 
-**Q10. What does HKDF do, and why is it better than `SHA256(str(secret))`?**
-A: HKDF (HMAC-based Key Derivation Function, RFC 5869) takes a secret input and produces
-cryptographically strong key material of arbitrary length with a "salt" and "info" context.
-`SHA256(str(secret))` is fragile because converting an integer to its decimal string
-representation is non-standard and wastes entropy. HKDF is the NIST-recommended KDF.
+**Q11. What does `hmac.compare_digest` protect against in `mfa.py`?**
+A: Timing attacks. A standard `==` short-circuits on the first mismatched byte, leaking
+information about how many bytes matched. `hmac.compare_digest` always compares all
+bytes in constant time, preventing byte-by-byte enumeration of the stored hash.
 
-**Q11. What does `hmac.compare_digest` in `mfa.py` protect against?**
-A: Timing attacks. A normal `==` comparison returns early as soon as it finds a mismatch,
-leaking how many bytes matched. `hmac.compare_digest` always takes the same time regardless
-of how many bytes match, preventing an attacker from inferring the hash byte-by-byte.
+**Q12. What does AVISPA's Dolev-Yao model assume?**
+A: The intruder has full control of the network: can intercept, replay, delay, modify,
+and compose any message. A SAFE result under Dolev-Yao means no attack exists given
+those capabilities.
 
-**Q12. What does AVISPA's Dolev-Yao intruder model assume?**
-A: The Dolev-Yao model gives the attacker complete control of the network: they can
-intercept, record, delay, replay, and compose messages. If AVISPA says SAFE under
-Dolev-Yao, the protocol is secure against any network-level attacker.
+**Q13. What does a SAFE AVISPA result NOT guarantee?**
+A: It does not cover implementation bugs (e.g., wrong domain label in actual code),
+side-channel attacks, compromised private keys, or threats outside the formal model.
 
-**Q13. What does SAFE in AVISPA's output mean, and what doesn't it tell us?**
-A: SAFE means no attack was found within the formal model. It does NOT cover implementation
-bugs, side-channel attacks, compromised private keys, or attacks outside the modeled threat
-model (e.g., a coerced participant).
+**Q14. What would be needed to achieve forward secrecy?**
+A: Use ephemeral DH keys: generate a fresh RSA (or better, ECDH) signing key for each
+session, prove identity only through the long-term key signing the ephemeral key. If
+the long-term key is later compromised, past sessions remain safe because the ephemeral
+private keys are gone. This is how TLS 1.3 with ECDHE achieves forward secrecy.
 
-**Q14. What does our `--secure` mode NOT protect against, and what would TLS add?**
-A: Our mode doesn't provide forward secrecy (static keys), doesn't have a PKI (pre-shared
-keys only), and doesn't defend against a compromised private key. TLS adds a certificate
-authority hierarchy, ephemeral Diffie-Hellman (for forward secrecy), and protects against
-key-compromise impersonation.
-
-**Q15. Can Mallory simply relay messages unchanged in `--secure` mode and still succeed?**
-A: No. If Mallory relays the real A without modifying it, she cannot compute the shared
-secret (she doesn't know Alice's private exponent `a`). She would be acting as a transparent
-proxy, unable to decrypt anything. To mount the MITM she MUST substitute her own DH value,
-and that substitution is what the signature check catches.
+**Q15. Can Mallory succeed by relaying messages unchanged in `--secure` mode?**
+A: No. If she relays Bob's real A unmodified, she cannot compute the shared secret
+(she doesn't know Bob's private exponent). She would be a transparent proxy, unable
+to decrypt anything. To intercept, she must substitute her own DH value — and that
+substitution is exactly what the signature check catches.
 
 ---
 
 ## PART 11 — SYLLABUS MAPPING
 
-| Project Component | File(s) | IS Unit | Topic |
+| Component | File(s) | IS Unit | Topic |
 |---|---|---|---|
-| Diffie-Hellman key exchange demo | `diffie_hellman.py`, `run.py` | Unit III | Diffie-Hellman key exchange |
-| AES-128-CBC (baseline) | `crypto_protocol.py` | Unit II, III | Block ciphers, AES |
-| AES-256-GCM (Phase 2) | `crypto_protocol.py` | Unit III | AES; authenticated encryption |
-| MITM attack demonstration | `mitm.py`, `headless_mitm_test.py` | Unit I | Man-in-the-middle attack |
-| RSA-PSS/SHA-512 signatures | `auth_dh.py` | Unit III, IV | RSA; digital signatures |
-| SHA-512 in signatures | `auth_dh.py` | Unit IV | SHA-512, Secure Hash Functions |
+| Diffie-Hellman key exchange (demo) | `diffie_hellman.py`, `run.py` | Unit III | Diffie-Hellman key exchange |
+| AES-128-CBC (baseline, Phase 0) | `crypto_protocol.py` | Unit II, III | Block ciphers, AES |
+| AES-256-GCM (Phase 2+) | `crypto_protocol.py` | Unit III | AES; authenticated encryption |
+| MITM attack demo | `mitm.py`, `headless_mitm_test.py` | Unit I | Man-in-the-middle attack |
+| RSA-PSS/SHA-512 signatures | `auth_dh.py` | Units III, IV | RSA; digital signatures |
+| SHA-512 in signatures | `auth_dh.py` | Unit IV | SHA-512, secure hash functions |
 | HKDF key derivation | `crypto_protocol.py` | Unit IV | Key management |
+| RFC 3526 MODP group | `diffie_hellman.py` | Unit III | DH parameter standards |
 | TOTP-based MFA | `mfa.py`, `enroll.py` | Unit IV (self-learning) | Multi-factor authentication |
 | PBKDF2-SHA512 password hashing | `mfa.py` | Unit IV | Cryptography for authentication |
-| AVISPA formal verification (UNSAFE/SAFE) | `avispa/dh_unauth.hlpsl`, `avispa/dh_auth.hlpsl` | Unit IV (case study) | Identifying MITM attacks using AVISPA |
-| Public key pre-sharing discussion | `gen_keys.py`, viva Q13-14 | Unit IV | Key management |
-| Security policy / threat discussion | `IMPLEMENTATION_PLAN.md` §6 | Unit I | Threats, vulnerabilities, NIST CSF |
+| AVISPA formal verification | `avispa/dh_*.hlpsl` | Unit IV (case study) | MITM in public-key exchange, AVISPA |
+| Public key distribution discussion | `gen_keys.py`, viva Q14 | Unit IV | Key management |
+| Security policy / threat model | This plan, Part 6 | Unit I | Threats, NIST CSF |
 
 ---
 
 ## PART 12 — DEFINITION OF DONE
 
-The team can declare the project ready when ALL of the following are checked:
-
 ### Code
-- [ ] `python -m pytest tests/ -v` — **all tests green** on a clean `pip install -r requirements.txt`
+- [ ] `python -m pytest tests/ -v` — all green on clean `pip install -r requirements.txt`
 - [ ] `python headless_test.py` — `[PASS]`
 - [ ] `python headless_mitm_test.py` — `[PASS] MITM attack succeeded`
-- [ ] `python run.py 9000 --secure` (server) + `python run.py 127.0.0.1 9000 --secure` (client) — chat works
-- [ ] Same MITM scenario with `--secure` — both endpoints print abort message within 5 seconds
+- [ ] `--secure` chat works (no MITM): both sides send/receive messages
+- [ ] `--secure` with MITM: both endpoints print `Signature verification FAILED`
+- [ ] `--mfa --secure`: correct OTP → chat; wrong OTP → rejected; 3 failures → locked
 
 ### Security hygiene
-- [ ] `git log --all --full-history -- "*.pem"` — **no private key files in git history**
-- [ ] `cat .gitignore | grep pem` — `*_priv.pem` present
-- [ ] `requirements.txt` tested on a fresh venv on a second machine
+- [ ] `git log --all --full-history -- "*.pem"` — **no output** (no PEM files ever committed)
+- [ ] `cat .gitignore | findstr pem` — `*.pem` present
+- [ ] `requirements.txt` works on a clean venv on a second machine
 
 ### Documentation
-- [ ] `README.md` has: install instructions, all demo commands, original author credit, MIT license notice
-- [ ] `DEMO.md` complete with exact port numbers and process start order
+- [ ] `README.md`: install, all modes, original author credit, MIT license notice
+- [ ] `DEMO.md`: exact port numbers, process start order, expected outputs
 - [ ] Three Mermaid diagrams committed to `docs/`
-- [ ] AVISPA screenshots in `docs/` (from actual runs — not fabricated)
+- [ ] AVISPA screenshots in `docs/` — **from actual AVISPA runs only**
 
 ### Demo readiness
-- [ ] Full demo rehearsed 3× end-to-end
-- [ ] Pre-recorded backup video exists (`.mp4` in `docs/`)
-- [ ] Every team member can explain the DH math and the MITM attack without notes
-- [ ] Every team member has reviewed all 15 viva questions
+- [ ] Full demo rehearsed × 3
+- [ ] Pre-recorded backup video in `docs/`
+- [ ] Every member can explain DH math and MITM without notes
+- [ ] Every member reviewed all 15 viva questions
 
 ### Report
-- [ ] Original authors credited (Jay Bosamiya and Rakholiya Jenish, MIT License 2015)
-- [ ] All 5 demo scenarios described with screenshots
-- [ ] Security analysis section covers both what works and what doesn't (Part 6 above)
+- [ ] Original authors credited (Jay Bosamiya & Rakholiya Jenish, MIT, 2015)
+- [ ] All scenarios described with screenshots
+- [ ] Security analysis: what works and what doesn't (Part 6 above)
 - [ ] Syllabus mapping table included
 
 ---
 
 ## APPENDIX — PHASE COMPLETION AUDIT TRAIL
 
-| Phase | Status | Date | Tester | Evidence |
+| Phase | Status | Date | Tester | Commit / Evidence |
 |---|---|---|---|---|
-| Phase 0: Python 3 port | ✅ DONE | 2026-09-30 | AI agent | All 4 headless tests pass; output logged above |
-| Phase 1: `--secure` flag | 🔲 TODO | — | — | — |
-| Phase 2: AES-GCM + HKDF | 🔲 TODO | — | — | — |
+| Phase 0: Python 3 port | ✅ DONE | 2026-09-30 | AI agent | tag `phase-0`, commit `63b402d`; headless tests PASS |
+| Phase 0: GUI check | ⚠️ MANUAL | — | Team | Run Scenarios 1 & 2 in terminals; tick when done |
+| Phase 1: `--secure`/`--no-gui` | ✅ DONE | 2026-09-30 | AI agent | tag `phase-1`; `test_args.py` all pass |
+| Phase 2: AES-GCM + RFC 3526 | 🔲 TODO | — | — | — |
 | Phase 3: Signatures | 🔲 TODO | — | — | — |
 | Phase 4: Attack fails | 🔲 TODO | — | — | — |
-| Phase 5: MFA | 🔲 TODO | — | — | — |
-| Phase 6: AVISPA | 🔲 TODO | — | — | — |
+| Phase 5: AVISPA | 🔲 TODO | — | — | — |
+| Phase 6: MFA | 🔲 TODO | — | — | — |
 | Phase 7: Docs | 🔲 TODO | — | — | — |
-| Final demo rehearsal × 3 | 🔲 TODO | — | — | — |
+| Final rehearsal × 3 | 🔲 TODO | — | — | — |
 | Clean-env test (second machine) | 🔲 TODO | — | — | — |
 | Report submitted | 🔲 TODO | — | — | — |
 
-> **Update this table after every phase is merged to `main`.**
-> Fill in the Date and Tester columns; link to the relevant git commit SHA.
+> **Fill in Date, Tester, and Commit SHA after each phase is merged to `main`.**
