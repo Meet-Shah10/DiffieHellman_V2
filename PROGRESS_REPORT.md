@@ -13,269 +13,190 @@
 |---|---|---|---|---|
 | 0 | Python 3 Port + Baseline | ✅ **DONE** | `phase-0` | `63b402d` |
 | 1 | `--secure`/`--no-gui` Argparse + Banner + Stdin Thread | ✅ **DONE** | `phase-1` | `c901a1b` |
+| 1.5 | Transport Hygiene, .gitignore, Exact Pins | ✅ **DONE** (partial) | — | `df3f628` |
 | 2 | AES-256-GCM + HKDF + RFC 3526 MODP Group | ✅ **DONE** | `phase-2` | `5f083d7` |
-| 3 | RSA-PSS/SHA-512 Signed DH (`auth_dh.py`) | 🔲 TODO | — | — |
-| 4 | MITM Forgery Fails in `--secure` Mode | 🔲 TODO | — | — |
-| 5 | AVISPA Formal Verification | 🔲 TODO | — | — |
+| 2 fixes | Subgroup check (F02), exponent [2,q-1] (F23), drop pycryptodome | ✅ **DONE** | — | `df3f628` |
+| 3 | RSA-PSS/SHA-512 Signed DH (`dhc1_core.py`, `auth_dh.py`) | ✅ **DONE** | — | `df3f628` |
+| 4 | MITM Attack Modes (substitute/splice/relay) | ✅ **DONE** | — | `df3f628` |
+| 5 | AVISPA Formal Verification | 🔲 HLPSL written (UNRUN) | — | — |
 | 6 | TOTP MFA Inside AES-GCM Channel | 🔲 TODO | — | — |
 | 7 | Docs, README, Mermaid Diagrams, Final Polish | 🔲 TODO | — | — |
+| 8 | Report, Slides, Rehearsal | 🔲 TODO | — | — |
 
-**3 of 8 phases done. 5 remaining.**
+**6 of 8 phases done (core protocol complete). 2 remaining (MFA + docs).**
 
 ---
 
 ## What Is Done
 
-### Phase 0 — Python 3 Port (tag: `phase-0`)
+### Phases 0–1 (previous sessions — unchanged)
 
-**Goal:** Make the 2015 Python 2 codebase run under Python 3.13 with minimal changes.
+See prior progress report entries.
 
-**Changes made:**
+---
 
-| File | What changed |
+### Phase 2 Fixes (commit: `df3f628`)
+
+| Finding | Fix |
 |---|---|
-| `network.py` | Removed `pwntools`; replaced with stdlib `socket` + `base64` (Windows compatible) |
-| `diffie_hellman.py` | `print()`, `//` integer division, `RSAKey.p` → `RSAKey.key.p` |
-| `crypto_protocol.py` | Full bytes/str fix; `//`; `bytes.fromhex`; encrypt returns hex string |
-| `gui.py` | `Tkinter` → `tkinter`; `print()` |
-| `run.py` | `print()` syntax only |
-| `mitm.py` | `print()` syntax only |
+| F02: Range check `1<v<p-1` insufficient — non-residue `11` passes but leaks exponent bit | `validate_public_value` now also checks `pow(v,q,p)==1` |
+| F23: Exponent was in `[2,p-2]` not `[2,q-1]` | Fixed to `secrets.randbelow(RFC3526_Q-2)+2` |
+| F23: `assert` in group sanity → bypassed by `-O` | Replaced with explicit `raise RuntimeError` |
+| F11: `from Crypto.PublicKey import RSA` at module top | Removed; pycryptodome fully dropped |
+| requirements.txt: `>=` pins | Exact pins (`cryptography==46.0.3`) |
 
-**New files added:**
+---
+
+### Phase 1.5 — Hygiene (commit: `df3f628`)
+
+| Item | Done |
+|---|---|
+| `.gitignore`: `*.pem`, `keys/**/*.pem`, `users.json`, `*_mfa_qr.png`, `venv*/`, `.pytest_cache/`, `deps/`, `*.mp4` | ✅ |
+| `requirements.txt`: exact pin, pycryptodome removed, pyotp/qrcode/Pillow added for Phase 6 | ✅ |
+| `requirements-dev.txt`: pinned `pytest==8.3.5` | ✅ |
+| Transport API (send_line/recv_line with timeouts) | 🔲 Still using network.py baseline |
+| CI `.github/workflows/ci.yml` | 🔲 TODO |
+| `tests/helpers.py`: free_port, start, kill_all | 🔲 TODO |
+
+---
+
+### Phase 3 — RSA-PSS/SHA-512 Signed DH (commit: `df3f628`)
+
+**Goal:** When `--secure` is passed, the DH handshake is authenticated via the DHC1 3-message protocol. Neither side accepts an unverified public value.
+
+**New files:**
 
 | File | Purpose |
 |---|---|
-| `requirements.txt` | `pycryptodome==3.23.0` |
-| `headless_test.py` | Integration test: DH + AES round-trip without GUI |
-| `headless_mitm_test.py` | Integration test: MITM parameter injection without GUI |
+| `dhc1_core.py` | Pure-function DHC1 protocol core: `Server`/`Client` state machines, `Record` (AES-256-GCM directional), `derive_keys` (HKDF + transcript hash), `enc`/`dec` (fixed-width), `sign`/`verify`/`fingerprint`, transcript constructors |
+| `auth_dh.py` | PEM key management (O_EXCL creation, 0600 perms), `secure_handshake_server/client` (transport wrappers with socket timeouts), `fingerprint_hex` |
+| `gen_keys.py` | CLI: `python gen_keys.py [alice bob mallory]`. Creates `keys/<name>/` with priv+pub PEM. Refuses to overwrite. Prints SHA-256 fingerprints. |
 
-**Verified output:**
+**Modified files:**
+
+| File | What changed |
+|---|---|
+| `crypto_protocol.py` | Completely rewritten on `dhc1_core.Record`; two directional AES-256-GCM keys + counter nonces + direction AAD (F04 fix); `is_server` flag required |
+| `run.py` | `--secure` now calls `secure_handshake_server/client`; `--key-dir`, `--peer-pub` flags; `HandshakeError` caught with abort banner; legacy path unchanged |
+| `headless_test.py`, `headless_mitm_test.py` | Updated for `is_server` flag |
+
+**Protocol (DHC1 — Part 3.2):**
 ```
-$ python diffie_hellman.py        → [+] DH self-test passed
-$ python crypto_protocol.py       → [+] CBC decrypt(encrypt(text))==text test passed
-$ python headless_test.py         → [PASS] All messages round-tripped correctly.
-$ python headless_mitm_test.py    → [PASS] MITM attack succeeded — unauthenticated DH is broken.
+M1  S -> C : {t:"hello", v:1, gs, sig_S}     sig_S = Sign_S("DHC1|server-hello|modp2048|" || Gs)
+M2  C -> S : {t:"auth",  gc, sig_C}           sig_C = Sign_C("DHC1|client-auth|" || FPs || FPc || Gs || Gc)
+M3  S -> C : {t:"confirm", sig_S2}            sig_S2 = Sign_S("DHC1|server-auth|" || FPs || FPc || Gs || Gc)
+```
+
+**Test results:**
+```
+tests/test_dhc1_core.py   16 tests  ✅ all passed
+tests/test_auth_dh.py     12 tests  ✅ all passed
 ```
 
 ---
 
-### Phase 1 — Argparse + Mode Banner + Stdin Thread (tag: `phase-1`)
+### Phase 4 — MITM Attack Modes (commit: `df3f628`)
 
-**Goal:** Add `--secure` and `--no-gui` flags so automated tests can drive the chat processes via stdin/stdout pipes (no Tkinter needed).
+**Goal:** `mitm.py --secure` speaks the full signed wire format and demonstrates three attack outcomes.
 
-**Changes made:**
+**Attack modes (--attack):**
 
-| File | What changed |
-|---|---|
-| `run.py` | `argparse` parser; `parse_args()`; `print_banner(role, secure)`; `StdinReaderThread` (reads stdin, sends encrypted messages); `--no-gui` guards on GUI; `[Other] plaintext` printed to stdout |
-| `mitm.py` | `argparse` parser; `parse_args()`; `print_banner(secure)`; `log_intercept(name, text)` helper; `--no-gui` guard on GUI thread |
-
-**New files added:**
-
-| File | Purpose |
-|---|---|
-| `tests/__init__.py` | Makes `tests/` a Python package |
-| `tests/conftest.py` | `--run-slow` pytest flag for gating subprocess integration tests |
-| `tests/test_args.py` | 23 unit tests: argparse correctness, banner text, stdin integration |
-
-**Test results:**
-```
-pytest tests/test_args.py -v
-22 passed, 1 skipped (slow subprocess test)   in 0.04s
-```
-
-**What `--secure` does in Phase 1:** Banner only — prints `SECURE (signed DH — Phase 3 not yet active)`. Crypto is unchanged. Flag is wired for Phase 3.
-
-**What `--no-gui` does:** Replaces Tkinter GUI thread with a `StdinReaderThread`. Subprocess tests pipe lines to stdin; received messages print to stdout. Enables headless automated testing.
-
----
-
-### Phase 2 — AES-256-GCM + HKDF + RFC 3526 (tag: `phase-2`)
-
-**Goal:** Replace the broken/weak Phase 0 crypto with cryptographically sound primitives. Protocol remains MITM-vulnerable (no signatures yet) — this is intentional for the demo.
-
-**Changes made:**
-
-| File | What changed |
-|---|---|
-| `diffie_hellman.py` | RFC 3526 Group 14 (2048-bit safe prime, `g=2`) replaces `RSA.generate(2048).p`; `secrets.randbelow` replaces `random.randint`; rejects non-RFC-3526 `p`/`g`; `validate_public_value()` rejects values outside `(1, p-1)` |
-| `crypto_protocol.py` | **AES-256-GCM** replaces hand-rolled AES-128-CBC; **HKDF-SHA-256** replaces `SHA256(str(secret))`; fresh 12-byte random nonce per message; `InvalidTag` on tamper |
-| `run.py` | Client path catches `ValueError` from `DiffieHellman(p,g)` and `get_shared_secret()` → clean abort instead of crash |
-| `requirements.txt` | Added `cryptography>=42.0.0` |
-
-**New files added:**
-
-| File | Purpose |
-|---|---|
-| `tests/test_crypto_v2.py` | 34 tests: AES-GCM round-trip, tamper detection, nonce uniqueness, key properties, RFC 3526 group, range validation, DH correctness, inline chat+MITM regression |
-
-**Test results:**
-```
-pytest tests/test_crypto_v2.py tests/test_args.py -v
-56 passed, 1 skipped   in 1.49s   ← was 40+s before (RFC 3526 = no key gen at startup)
-```
-
-**Go/No-Go confirmed:**
-```
-TestHeadlessRegression::test_mitm_still_works_vulnerable_mode   PASSED
-```
-MITM still intercepts plaintext → Phase 3 can proceed safely.
-
-**Security improvements over Phase 0:**
-
-| Attack vector | Phase 0 | Phase 2 |
+| Mode | What Mallory does | Result |
 |---|---|---|
-| Ciphertext bit-flip | Undetected (CBC, no MAC) | `InvalidTag` raised (GCM) |
-| Fixed IV per session | Leaks repeated-prefix patterns | Fresh 12-byte nonce per message |
-| Weak DH group | Random ~1024-bit prime, random `g` (not primitive root) | RFC 3526 safe prime, `g=2` |
-| Parameter injection (bad p/g) | Any values accepted | `ValueError` if `p≠RFC3526_P` or `g≠2` |
-| Small-subgroup attack | No range check on received values | `validate_public_value()` enforced |
+| `substitute` (default) | Signs her own `Gs` with her own RSA key | Client: `Signature verification FAILED`. Server aborts. |
+| `splice` | Keeps real sig, swaps in Mallory's `Gs` | Client: `Signature verification FAILED` (sig covers wrong value) |
+| `relay` | Forwards all handshake messages unchanged | Chat works; Mallory sees only GCM ciphertext |
+
+**Two independent DH exchanges** (F09 fix): `mitm.py` now holds separate `dh_server` and `dh_client` objects.
+
+**Readiness signal:** `[*] listening` printed before blocking on `accept()` — test harness can sync on this.
+
+---
+
+## Test Inventory (current)
+
+```
+tests/
+├── conftest.py            --run-slow gate
+├── test_args.py           23 tests  (Phase 1)
+├── test_crypto_v2.py      34 tests  (Phase 2/3: AES-GCM directional, RFC 3526, subgroup)
+├── test_dhc1_core.py      16 tests  (Phase 3: protocol core, all attack scenarios)
+└── test_auth_dh.py        12 tests  (Phase 3: key I/O, handshake, wrong-key abort)
+
+Total: 85 tests (84 pass, 1 skipped slow subprocess test)
+```
+
+**Run:**
+```bash
+python -m pytest tests/ -v                      # 84 passed, 1 skipped in ~10s
+python headless_test.py                         # [PASS] All messages round-tripped correctly.
+python headless_mitm_test.py                    # [PASS] MITM attack succeeded — unauthenticated DH is broken.
+```
 
 ---
 
 ## What Is Remaining
 
-### Phase 3 — RSA-PSS/SHA-512 Signed DH 🔲
-
-**Goal:** When `--secure` is passed, the DH handshake is authenticated. Neither side accepts an unverified public value.
-
-**Files to create:**
-- `auth_dh.py` — `generate_keypair()`, `sign()`, `verify()`, `HandshakeError`, load/save PEM
-- `gen_keys.py` — one-shot CLI to create `alice_priv.pem`, `bob_priv.pem`; refuses overwrite
-
-**Files to modify:**
-- `crypto_protocol.py` — add `secure_handshake_server()` / `secure_handshake_client()`
-- `run.py` — call secure handshake when `--secure`; catch `HandshakeError`
-- `.gitignore` — add `*.pem`, `users.json`
-
-**Key design decisions:**
-- Scheme: **RSA-PSS / SHA-512** (maps to IS Unit III+IV)
-- Domain labels: server signs `b"server-hello" + A_bytes`; client signs `b"client-hello" + B_bytes + A_bytes`
-- `verify()` raises `HandshakeError`, never returns bool; `run.py` catches it and closes socket
-- No `sys.exit()` inside library code (`auth_dh.py`, `crypto_protocol.py`)
-- All PEM files in `.gitignore` — never committed, even public keys
-
-**Tests to write:** `tests/test_auth_dh.py` (8 tests: sign/verify, tamper, domain labels, session binding, no-overwrite)
-
----
-
-### Phase 4 — MITM Forgery Fails in `--secure` Mode 🔲
-
-**Goal:** `mitm.py --secure` speaks the full signed wire format, attempts forgery (garbage signature), and both endpoints abort with `HandshakeError`.
-
-**Files to modify:**
-- `mitm.py` — add `--secure` branch in the handshake that reads signed wire format, substitutes its own DH value with a garbage/forged signature, logs the forgery attempt
-
-**Expected output when MITM attempts forgery:**
-```
-[Server] [SECURE] Signature verification FAILED: ...
-[Server] [SECURE] Possible man-in-the-middle attack. Aborting.
-[Client] [SECURE] Signature verification FAILED: ...
-[MITM]   Sent forged A + garbage signature to client.
-[MITM]   Endpoints should now abort with HandshakeError.
-```
-
-**Tests to write:** `tests/test_secure_vs_mitm.py` (8 scenarios: normal chat, MITM breaks vulnerable, secure chat works, MITM fails secure, tampered sig, replayed sig, wrong key, wrong domain label)
-
----
-
 ### Phase 5 — AVISPA Formal Verification 🔲
 
-**Goal:** Model both protocol variants in HLPSL, run OFMC, screenshot UNSAFE (unauthenticated) and SAFE (signed) results for the report and slides.
+**HLPSL models are written (UNRUN):**
 
-**Files to create:**
-- `avispa/dh_unauth.hlpsl` — unauthenticated DH; expected UNSAFE
-- `avispa/dh_auth.hlpsl` — signed DH (Phase 3 design); expected SAFE
-- `avispa/README_avispa.md` — how to install and run AVISPA
-- `docs/avispa_unsafe.png` — screenshot from actual run (not placeholder)
-- `docs/avispa_safe.png` — screenshot from actual run
+| File | Expected result |
+|---|---|
+| `avispa/dh_unauth.hlpsl` | UNSAFE — intruder learns session payload |
+| `avispa/dh_auth.hlpsl` | SAFE — both directions authenticated |
 
-**⚠️ Action needed:** HLPSL skeleton is written in `IMPLEMENTATION_PLAN.md` (Part 3, Phase 5). Must be tested against a real AVISPA binary or web interface before submission. Do not include unrun results in the report.
-
-**How to run:**
+**Action needed (Day 1 spike, 3 hours):**
 ```bash
-# Local (Linux/WSL): ./avispa --ofmc avispa/dh_unauth.hlpsl
-# Web: https://avispa-project.org/ → paste HLPSL → OFMC → Verify → screenshot
+# Option A: SPAN Linux binary in WSL
+./span/bin/avispa avispa/dh_unauth.hlpsl --ofmc
+./span/bin/avispa avispa/dh_auth.hlpsl   --ofmc
+# Option B: OFMC from source
+git clone https://github.com/ofmc/ofmc.git && cd ofmc && stack build
+# Option C: Ask faculty for lab access
 ```
+
+See `avispa/README_avispa.md` for full instructions.
+
+> ⚠️ Do not include UNSAFE/SAFE screenshots in the report unless your own run produced them.
 
 ---
 
 ### Phase 6 — TOTP MFA Inside AES-GCM Channel 🔲
 
-**Goal:** After the DH handshake establishes the session key, run TOTP + password login **inside the encrypted channel** (credentials never travel in plaintext).
+**Goal:** After the DH handshake, run TOTP + password login inside the encrypted channel.
 
 **Files to create:**
-- `mfa.py` — `enroll_user()`, `verify_login()`, `mfa_server_side()`, `mfa_client_side()`, PBKDF2-SHA512 password hashing, 3-attempt lockout
-- `enroll.py` — one-shot enrollment CLI; saves QR PNG
+- `mfa.py` — `enroll_user()`, `verify_login()`, `mfa_server_side()`, `mfa_client_side()`; PBKDF2-SHA-512 (210,000 iterations); 3-attempt lockout (persisted in `users.json`); TOTP replay protection (last accepted time-step stored); constant-time compare
+- `enroll.py` — enrollment CLI; saves QR PNG (git-ignored); `--show-code` fallback
 
 **Files to modify:**
-- `run.py` — if `--mfa`, call `mfa_server_side` / `mfa_client_side` after `CryptoProtocol` is ready
-- `requirements.txt` — add `pyotp>=2.9.0`, `qrcode>=7.4`, `Pillow>=10.0`
+- `run.py` — `--mfa` flag requires `--secure` (or `--allow-insecure-mfa` for the leak demo); calls `mfa_server_side`/`mfa_client_side` after handshake
 
-**MFA wire protocol (inside AES-GCM channel):**
+**Wire protocol (inside AES-GCM channel, JSON objects):**
 ```
-Client → Server:  Enc_K("MFA_USERNAME:" + username)
-Server → Client:  Enc_K("MFA_CHALLENGE")
-Client → Server:  Enc_K("MFA_CREDS:" + password + ":" + totp_code)
-Server → Client:  Enc_K("MFA_OK") or Enc_K("MFA_FAIL:" + reason)
+C -> S : Enc({"t":"mfa", "user":u, "pw":p, "otp":"123456"})
+S -> C : Enc({"t":"mfa_ok"})  or  Enc({"t":"mfa_fail"})   [no reason to client]
 ```
 
-**Tests to write:** `tests/test_mfa.py` (9 tests: enroll, correct login, wrong password, wrong OTP, lockout, lockout expiry, hash determinism, timing-safe compare, MFA over channel e2e)
+**Tests to write:** `tests/test_mfa.py` (13 tests per plan v2 Part 6.3)
 
 ---
 
 ### Phase 7 — Docs, Diagrams, Final Polish 🔲
 
-**Goal:** Professional README, DEMO.md runbook, Mermaid sequence diagrams, and verified clean-env test.
-
 **Files to create/modify:**
-- `README.md` — complete rewrite with install, all modes, original author credit, MIT license
-- `DEMO.md` — 10-minute demo runbook with exact port numbers, process order, expected output
+- `README.md` — complete rewrite: install, all modes, upstream credit, MIT notice
+- `DEMO.md` — 10-minute runbook with exact ports, process order, expected output
 - `docs/diagram_normal_dh.md` — Mermaid: normal DH chat
-- `docs/diagram_mitm_attack.md` — Mermaid: parameter injection attack
-- `docs/diagram_signed_dh.md` — Mermaid: signed DH, MITM fails
+- `docs/diagram_mitm_attack.md` — Mermaid: substitution attack
+- `docs/diagram_signed_dh.md` — Mermaid: DHC1, MITM fails
+- `--trace` flag in `run.py`/`mitm.py` — prints wire lines for demo without Wireshark
+- `LICENSE`, `UPSTREAM.md` — upstream MIT text, upstream commit SHA and author names (verify from upstream)
 
-**Clean-env test (must pass before submission):**
-```powershell
-python -m venv venv_test
-venv_test\Scripts\pip install -r requirements.txt
-venv_test\Scripts\python -m pytest tests/ -v
-# All green → remove venv_test/
-```
+### Phase 8 — Report, Slides, Rehearsal 🔲
 
----
-
-## Current Test Inventory
-
-```
-tests/
-├── conftest.py            --run-slow gate for subprocess tests
-├── test_args.py           23 tests  (Phase 1: argparse, banner, stdin integration)
-└── test_crypto_v2.py      34 tests  (Phase 2: AES-GCM, RFC 3526, DH, regression)
-
-Planned:
-├── test_auth_dh.py        ~8 tests  (Phase 3)
-├── test_secure_vs_mitm.py ~8 tests  (Phase 4)
-└── test_mfa.py            ~9 tests  (Phase 6)
-```
-
-**Current run:** `56 passed, 1 skipped` in 1.5 s
-
----
-
-## Manual Checks Still Needed
-
-Before ticking Phase 0 complete in the audit table, run this manually:
-
-```powershell
-# Terminal 1 — vulnerable server:
-venv\Scripts\activate && python run.py 9000
-
-# Terminal 2 — vulnerable client:
-venv\Scripts\activate && python run.py 127.0.0.1 9000
-```
-
-Expected: two Tkinter windows open; mode banner shows `VULNERABLE`; messages appear in both windows.
+See `IMPLEMENTATION_PLAN_v2.md` Part 8 for deliverables and Phase 12 for the 20 viva questions.
 
 ---
 
@@ -283,26 +204,35 @@ Expected: two Tkinter windows open; mode banner shows `VULNERABLE`; messages app
 
 ```
 DiffieHellman_V2/
-├── run.py                  Server/client; --secure (banner); --no-gui (stdin thread)
-├── mitm.py                 MITM proxy; --secure (banner); --no-gui
+├── run.py                  Server/client; --secure (DHC1); --key-dir, --peer-pub; --no-gui
+├── mitm.py                 MITM proxy; --secure (substitute/splice/relay); --no-gui
 ├── network.py              stdlib TCP; base64-framed newline-delimited messages
-├── diffie_hellman.py       RFC 3526 2048-bit MODP; validate_public_value; secrets.randbelow
-├── crypto_protocol.py      AES-256-GCM + HKDF-SHA-256
+├── diffie_hellman.py       RFC 3526 2048-bit MODP; subgroup check pow(v,q,p)==1; secrets.randbelow [2,q-1]
+├── crypto_protocol.py      dhc1_core.Record wrapper; directional AES-256-GCM; counter nonces
+├── dhc1_core.py            ★ NEW: pure DHC1 protocol core (Server, Client, Record, derive_keys)
+├── auth_dh.py              ★ NEW: PEM key I/O, secure_handshake_server/client, fingerprint_hex
+├── gen_keys.py             ★ NEW: key generation CLI (alice/bob/mallory)
 ├── gui.py                  Tkinter chat GUI (skipped with --no-gui)
-├── headless_test.py        Integration: DH + AES round-trip
-├── headless_mitm_test.py   Integration: MITM parameter injection
+├── headless_test.py        Integration: DH + AES round-trip (updated for is_server)
+├── headless_mitm_test.py   Integration: MITM parameter injection (updated for is_server)
+│
+├── avispa/
+│   ├── dh_unauth.hlpsl     ★ NEW: HLPSL model, expected UNSAFE (UNRUN)
+│   ├── dh_auth.hlpsl       ★ NEW: HLPSL model, expected SAFE (UNRUN)
+│   └── README_avispa.md    ★ NEW: install spike guide
 │
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py
 │   ├── test_args.py        Phase 1 tests (23)
-│   └── test_crypto_v2.py   Phase 2 tests (34)
+│   ├── test_crypto_v2.py   Phase 2/3 tests (34)
+│   ├── test_dhc1_core.py   ★ NEW: Phase 3 protocol tests (16)
+│   └── test_auth_dh.py     ★ NEW: Phase 3 transport tests (12)
 │
-├── requirements.txt        pycryptodome, cryptography, pytest
-├── IMPLEMENTATION_PLAN.md  Full design spec with all phases
+├── requirements.txt        cryptography==46.0.3, pyotp, qrcode, Pillow (exact pins)
+├── requirements-dev.txt    ★ NEW: pytest==8.3.5
+├── IMPLEMENTATION_PLAN_v2.md
 ├── PROGRESS_REPORT.md      This file
-├── IS_FA2_Project_Context.md
-├── README.md
 └── report/                 Original authors' report (unchanged)
 ```
 
@@ -310,27 +240,59 @@ DiffieHellman_V2/
 
 ## Quick Commands
 
-```powershell
-# Activate venv
-venv\Scripts\activate
-
-# Run all tests (fast — skips slow subprocess test)
+```bash
+# Run all tests
 python -m pytest tests/ -v
 
-# Run slow subprocess integration test (needs ~90s)
-python -m pytest tests/ -v --run-slow
+# Run individual test files
+python -m pytest tests/test_dhc1_core.py -v      # protocol tests
+python -m pytest tests/test_auth_dh.py -v         # key and handshake tests
 
-# Self-test individual modules
-python diffie_hellman.py
-python crypto_protocol.py
+# Generate keys (prerequisite for --secure demo)
+python gen_keys.py                                  # creates keys/alice/, keys/bob/, keys/mallory/
 
-# See all git tags
-git tag -l
+# Headless integration tests
+python headless_test.py
+python headless_mitm_test.py
 
-# See phase commit history
-git log --oneline
+# Demo: vulnerable MITM (3 terminals)
+python run.py 9000 --no-gui
+python mitm.py 127.0.0.1 9000 9001 --no-gui
+python run.py 127.0.0.1 9001 --no-gui
+
+# Demo: secure mode (MITM fails)
+python run.py 9000 --secure --no-gui
+python mitm.py 127.0.0.1 9000 9001 --secure --no-gui
+python run.py 127.0.0.1 9001 --secure --no-gui
+
+# Demo: relay mode (MITM sees only ciphertext)
+python mitm.py 127.0.0.1 9000 9001 --secure --attack relay --no-gui
+
+# See all git tags and commits
+git tag -l && git log --oneline
 ```
 
 ---
 
-*Report generated automatically by the AI agent. Update after each phase merge.*
+## Appendix B: Phase Completion Audit Trail (updated)
+
+| Phase | Status | Date | Tester | Commit or evidence |
+|---|---|---|---|---|
+| 0 Python 3 port | ✅ | 2026-09-30 | AI agent | tag `phase-0`, `63b402d` |
+| G0 GUI check | 🔲 | | Team | Run on demo PC before submission |
+| 1 `--secure`, `--no-gui` | ✅ | 2026-09-30 | AI agent | tag `phase-1`, `c901a1b` |
+| 1.5 Transport and hygiene (partial) | ✅ | 2026-10-01 | AI agent | `df3f628` |
+| 2 Crypto modernization | ✅ | 2026-09-30 | AI agent | tag `phase-2`, `5f083d7` |
+| 2 fixes (F02, F23) | ✅ | 2026-10-01 | AI agent | `df3f628` |
+| 3 Signed handshake (DHC1) | ✅ | 2026-10-01 | AI agent | `df3f628` — 84 tests pass |
+| 4 Attack modes | ✅ | 2026-10-01 | AI agent | `df3f628` |
+| 5 AVISPA (install spike) | 🔲 | | Team | HLPSL written; run on lab machine |
+| 6 MFA | 🔲 | | | |
+| 7 Docs | 🔲 | | | |
+| 8 Report, slides, rehearsal | 🔲 | | | |
+| Clean-env test, second machine | 🔲 | | | |
+| Submission | 🔲 | | | |
+
+---
+
+*Report updated automatically by the AI agent. Update after each phase merge.*
