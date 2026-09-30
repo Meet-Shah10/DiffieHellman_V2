@@ -115,10 +115,24 @@ else:
     p = int(get_line())
     g = int(get_line())
     A = int(get_line())
-    dh = DiffieHellman(p, g)
+    # Phase 2: DiffieHellman(p, g) raises ValueError if p/g ≠ RFC 3526 constants
+    # → rejects parameter-injection attacks at the group level.
+    # validate_public_value(A, p) is called inside get_shared_secret below.
+    try:
+        dh = DiffieHellman(p, g)
+    except ValueError as e:
+        print(f"[!] DH parameter rejection: {e}", file=sys.stderr)
+        print("[!] Server sent non-standard DH parameters. Aborting.", file=sys.stderr)
+        conn._sock.close()
+        sys.exit(1)
     _, _, B = dh.generate_public_broadcast()
     conn.send(str(B))
-    crypto_protocol = CryptoProtocol(dh.get_shared_secret(A))
+    try:
+        crypto_protocol = CryptoProtocol(dh.get_shared_secret(A))
+    except ValueError as e:
+        print(f"[!] DH public value rejected: {e}", file=sys.stderr)
+        conn._sock.close()
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
