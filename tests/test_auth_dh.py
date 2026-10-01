@@ -86,7 +86,9 @@ def test_save_and_load_private_key(tmp_path):
 
     assert os.path.exists(path)
     mode = oct(stat.S_IMODE(os.stat(path).st_mode))
-    assert "600" in mode, f"Expected 0o600 permissions, got {mode}"
+    import platform
+    if platform.system() != "Windows":   # NTFS doesn't enforce Unix rwx bits
+        assert "600" in mode, f"Expected 0o600 permissions, got {mode}"
 
     loaded = load_private_key(path)
     # Verify the loaded key has the same public key
