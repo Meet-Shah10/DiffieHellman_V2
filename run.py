@@ -135,9 +135,19 @@ def _resolve_key_paths(is_server: bool, key_dir: str | None, peer_pub: str | Non
         default_name = "alice"
         default_peer = "bob"
 
-    kd = key_dir if key_dir else os.path.join("keys", default_name)
-    priv_path = os.path.join(kd, f"{default_name}_priv.pem")
-    pub_path  = os.path.join(kd, f"{default_name}_pub.pem")
+    if key_dir:
+        kd = key_dir
+        folder_name = os.path.basename(os.path.normpath(kd))
+        if os.path.isfile(os.path.join(kd, f"{folder_name}_priv.pem")):
+            name = folder_name
+        else:
+            name = default_name
+    else:
+        name = default_name
+        kd = os.path.join("keys", default_name)
+
+    priv_path = os.path.join(kd, f"{name}_priv.pem")
+    pub_path  = os.path.join(kd, f"{name}_pub.pem")
 
     if peer_pub:
         peer_pub_path = peer_pub
